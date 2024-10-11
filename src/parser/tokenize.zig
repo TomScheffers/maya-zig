@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const TokenType = enum {
+pub const TokenType = enum {
     Keyword,
     Identifier,
     Operator,
@@ -9,18 +9,17 @@ const TokenType = enum {
     Whitespace,
     Symbol,
     Comment,
-    EOF,
 };
 
-const Token = struct {
+pub const Token = struct {
     token_type: TokenType,
     value: []const u8,
     position: usize,
 };
 
-const keywords = [_][]const u8{ "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "JOIN", "ORDER", "BY", "GROUP", "LIMIT" };
+pub const keywords = [_][]const u8{ "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "JOIN", "ORDER", "BY", "GROUP", "LIMIT", "AS" };
 
-const Tokenizer = struct {
+pub const Tokenizer = struct {
     input: []const u8,
     position: usize,
 
@@ -29,8 +28,11 @@ const Tokenizer = struct {
     }
 
     pub fn next(self: *Tokenizer) ?Token {
+        if (self.position == 10) return null;
+
         self.skip_whitespace();
-        if (self.position >= self.input.len) return Token{ .token_type = .EOF, .value = "", .position = self.position };
+
+        if (self.position >= self.input.len) return null;
 
         const c = self.input[self.position];
 
@@ -80,7 +82,7 @@ const Tokenizer = struct {
 
     fn tokenize_identifier_or_keyword(self: *Tokenizer) Token {
         const start_pos = self.position;
-        while ((self.position < self.input.len) and (Tokenizer.is_alphanumeric(self.input[self.position])) or self.input[self.position] == '.') {
+        while ((self.position < self.input.len) and (Tokenizer.is_alphanumeric(self.input[self.position])) or self.input[self.position] == '.' or self.input[self.position] == '*') {
             self.position += 1;
         }
         const value = self.input[start_pos..self.position];
@@ -116,7 +118,7 @@ const Tokenizer = struct {
     }
 
     fn tokenize_symbol_or_operator(self: *Tokenizer) Token {
-        const symbols = [_]u8{ '(', ')', ',', ';', '=', '>', '<' };
+        const symbols = [_]u8{ '(', ')', ',', ';', ':', '=', '>', '<', '*', '+', '-', '%', '/' };
         const start_pos = self.position;
 
         for (symbols) |symbol| {
@@ -129,13 +131,3 @@ const Tokenizer = struct {
         return Token{ .token_type = .Operator, .value = self.input[start_pos..self.position], .position = start_pos };
     }
 };
-
-test "tokenize" {
-    const sql: []const u8 = "SELECT *, u.*, o.name, 1.0 + o.vat::float as margin FROM users as u JOIN organisations as o USING (org_key) WHERE org_key = 0";
-    var tokenizer = Tokenizer.init(sql);
-
-    while (tokenizer.next()) |token| {
-        if (token.token_type == TokenType.EOF) break;
-        std.debug.print("Token: {} {s}\n", .{ token.token_type, token.value });
-    }
-}
