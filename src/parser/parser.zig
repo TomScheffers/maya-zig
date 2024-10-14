@@ -14,6 +14,7 @@ const SqlExpr: type = union {
     NamedWildcard: []const u8,
     BinaryExpression: void,
     UnaryExpression: void,
+    Cast: []const u8,
 };
 
 const SqlNamedExpr = struct {
@@ -32,15 +33,37 @@ const SqlSource: type = union {
 
 const SqlTable: type = struct { database: ?[]u8, schema: ?[]u8, name: []u8, alias: ?[]u8 };
 
-const SqlJoinMethod: type = enum { LEFT, RIGHT, INNER };
+const SqlJoinMethod: type = enum {
+    LEFT,
+    RIGHT,
+    INNER,
+    OUTER,
+    ANTI,
 
-const SqlJoinFrame: type = struct { right: SqlSource, method: SqlJoinMethod, using: std.ArrayList(SqlExpr) };
+    pub fn fromKeyword(keyword: []const u8) ?SqlJoinMethod {
+        if ((std.mem.eql(u8, keyword, "INNER")) or (std.mem.eql(u8, keyword, "JOIN"))) {
+            return SqlJoinMethod.INNER;
+        } else if (std.mem.eql(u8, keyword, "LEFT")) {
+            return SqlJoinMethod.LEFT;
+        } else if (std.mem.eql(u8, keyword, "RIGHT")) {
+            return SqlJoinMethod.RIGHT;
+        } else if (std.mem.eql(u8, keyword, "OUTER")) {
+            return SqlJoinMethod.OUTER;
+        } else if (std.mem.eql(u8, keyword, "ANTI")) {
+            return SqlJoinMethod.ANTI;
+        } else {
+            return null;
+        }
+    }
+};
+
+const SqlJoinFrame: type = struct { right: SqlSource, method: SqlJoinMethod, on: ?SqlNamedExpr, using: ?std.ArrayList([]const u8) };
 
 const SqlFrame: type = struct {
     selections: std.ArrayList(SqlNamedExpr), // SELECT ...
     source: SqlSource, // FROM ...
-    // joins: ?std.ArrayList(SqlJoinFrame), // {} JOIN ...
-    // where: ?SqlExpr, // WHERE ...
+    joins: std.ArrayList(SqlJoinFrame), // {} JOIN ...
+    where: ?SqlExpr, // WHERE ...
     // group_by: ?std.ArrayList(SqlExpr), // GROUP BY ...
     // having: ?SqlExpr, // HAVING ...
 };
@@ -81,8 +104,8 @@ const SqlParser = struct {
         const frame = SqlFrame{
             .selections = try self.parseSelections(),
             .source = try self.parseSource(),
-            // .joins = try self.parseJoin(),
-            //.where = try self.parseWhere(),
+            .joins = try self.parseJoins(),
+            .where = try self.parseWhere(),
             // .group_by = group_by,
             // .having = having_clause,
         };
@@ -90,89 +113,89 @@ const SqlParser = struct {
         return frame;
     }
 
+    fn parseSelection(self: *SqlParser) ParserErrors!?SqlNamedExpr {
+        var selection: ?SqlNamedExpr = null;
+        while (true) {
+            const token = self.peek() orelse break;
+
+            // Check if we need to terminate for FROM
+            if ((token.token_type == TokenType.Keyword) and std.mem.eql(u8, token.value, "FROM")) return selection;
+
+            switch (token.token_type) {
+                .Keyword => {
+                    if (std.mem.eql(u8, token.value, "as")) {
+                        const name = try (self.peek() orelse error.ExpectedName);
+                        if (name.token_type == TokenType.Identifier) {
+                            const alias = try self.allocator.dupe(u8, name.value);
+                            selection.?.name = alias;
+                        } else {
+                            return error.ExpectedName;
+                        }
+                    } else {
+                        std.debug.print("\nPlease implement {s}", .{token.value});
+                    }
+                },
+                .Symbol => {
+                    if (token.value[0] == ',') {
+                        self.position += 1;
+                        break;
+                    } else if ((selection == null) and (token.value[0] == '*')) {
+                        selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .Wildcard = undefined });
+                    } else {
+                        std.debug.print("\nPlease implement {s}", .{token.value});
+                    }
+                },
+                .Identifier => {
+                    const pidx = std.mem.indexOf(u8, token.value, ".");
+                    if (std.mem.containsAtLeast(u8, token.value, 1, "*")) {
+                        // Wilcard
+                        if (pidx) |idx| {
+                            const lit = try self.allocator.dupe(u8, token.value[0..idx]);
+                            selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .NamedWildcard = lit });
+                        } else {
+                            selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .Wildcard = undefined });
+                        }
+                    } else {
+                        // Column identifiers
+                        if (pidx) |idx| {
+                            const tbl = try self.allocator.dupe(u8, token.value[0..idx]);
+                            const idnt = try self.allocator.dupe(u8, token.value[idx..]);
+                            selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .NamedIdentifier = .{ .table = tbl, .name = idnt } });
+                        } else {
+                            const idnt = try self.allocator.dupe(u8, token.value);
+                            selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .Identifier = idnt });
+                        }
+                    }
+                },
+                .NumericLiteral => {
+                    const lit = try self.allocator.dupe(u8, token.value);
+                    selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .NumericLiteral = lit });
+                },
+                .StringLiteral => {
+                    const lit = try self.allocator.dupe(u8, token.value);
+                    selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .StringLiteral = lit });
+                },
+                else => {
+                    std.debug.print("\nPlease implement {}", .{token});
+                },
+            }
+            self.position += 1;
+        }
+        return selection;
+    }
+
     fn parseSelections(self: *SqlParser) ParserErrors!std.ArrayList(SqlNamedExpr) {
         try self.expect(tokenize.TokenType.Keyword); // Expect "SELECT"
 
         var selections = std.ArrayList(SqlNamedExpr).init(self.allocator);
-        outer: while (true) {
-            var selection: ?SqlNamedExpr = null;
-
-            while (true) {
-                const token = self.peek() orelse break;
-
-                // Check if we need to terminate for FROM
-                if ((token.token_type == TokenType.Keyword) and std.mem.eql(u8, token.value, "FROM")) {
-                    if (selection) |s| {
-                        try selections.append(s);
-                    }
-                    break :outer;
-                }
-
-                switch (token.token_type) {
-                    .Keyword => {
-                        if (std.mem.eql(u8, token.value, "as")) {
-                            const name = try (self.peek() orelse error.ExpectedName);
-                            if (name.token_type == TokenType.Identifier) {
-                                const alias = try self.allocator.dupe(u8, name.value);
-                                selection.?.name = alias;
-                            } else {
-                                return error.ExpectedName;
-                            }
-                        }
-
-                        std.debug.print("\nPlease implement {s}", .{token.value});
-                    },
-                    .Symbol => {
-                        if (token.value[0] == ',') {
-                            self.position += 1;
-                            break;
-                        } else if ((selection == null) and (token.value[0] == '*')) {
-                            selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .Wildcard = undefined });
-                        }
-                    },
-                    .Identifier => {
-                        const pidx = std.mem.indexOf(u8, token.value, ".");
-                        if (std.mem.containsAtLeast(u8, token.value, 1, "*")) {
-                            // Wilcard
-                            if (pidx) |idx| {
-                                const lit = try self.allocator.dupe(u8, token.value[0..idx]);
-                                selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .NamedWildcard = lit });
-                            } else {
-                                selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .Wildcard = undefined });
-                            }
-                        } else {
-                            // Column identifiers
-                            if (pidx) |idx| {
-                                const tbl = try self.allocator.dupe(u8, token.value[0..idx]);
-                                const idnt = try self.allocator.dupe(u8, token.value[idx..]);
-                                selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .NamedIdentifier = .{ .table = tbl, .name = idnt } });
-                            } else {
-                                const idnt = try self.allocator.dupe(u8, token.value);
-                                selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .Identifier = idnt });
-                            }
-                        }
-                    },
-                    .NumericLiteral => {
-                        const lit = try self.allocator.dupe(u8, token.value);
-                        selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .NumericLiteral = lit });
-                    },
-                    .StringLiteral => {
-                        const lit = try self.allocator.dupe(u8, token.value);
-                        selection = SqlNamedExpr.fromSqlExpr(SqlExpr{ .StringLiteral = lit });
-                    },
-                    else => {
-                        std.debug.print("\nPlease implement {}", .{token});
-                    },
-                }
-
-                self.position += 1;
-            }
-
+        while (true) {
+            const selection = try self.parseSelection();
             if (selection) |s| {
                 try selections.append(s);
+            } else {
+                break;
             }
         }
-
         return selections;
     }
 
@@ -221,10 +244,73 @@ const SqlParser = struct {
             return SqlSource{ .Table = SqlTable{ .database = database, .schema = schema, .name = name, .alias = alias } };
         }
     }
+
+    fn parseJoin(self: *SqlParser) ParserErrors!?SqlJoinFrame {
+        const token = self.peek();
+        if (token) |tk| {
+            if (tk.token_type == TokenType.Keyword) {
+                const join_method = SqlJoinMethod.fromKeyword(tk.value);
+                if (join_method) |jm| {
+                    const right = try self.parseSource();
+
+                    const jtoken = self.peek();
+                    if (jtoken) |jtk| {
+                        self.position += 1;
+                        if (std.mem.eql(u8, jtk.value, "USING")) { // (a, b, c)
+                            var using = std.ArrayList([]const u8).init(self.allocator);
+                            if (self.next().?.value[0] == '(') {
+                                while (self.next()) |utk| {
+                                    if (utk.value[0] == ')') {
+                                        break;
+                                    } else {
+                                        try using.append(utk.value);
+                                    }
+                                }
+                                return SqlJoinFrame{ .method = jm, .right = right, .on = null, .using = using };
+                            } else {
+                                return error.UnexpectedToken;
+                            }
+                        } else if (std.mem.eql(u8, jtk.value, "ON")) {
+                            const on = try self.parseSelection();
+                            return SqlJoinFrame{ .method = jm, .right = right, .on = on, .using = null };
+                        }
+                    }
+                    return SqlJoinFrame{ .method = jm, .right = right, .on = null, .using = null };
+                }
+            }
+        }
+        return null;
+    }
+
+    fn parseJoins(self: *SqlParser) ParserErrors!std.ArrayList(SqlJoinFrame) {
+        var joins = std.ArrayList(SqlJoinFrame).init(self.allocator);
+        while (try self.parseJoin()) |join| {
+            try joins.append(join);
+        }
+        return joins;
+    }
+
+    fn parseWhere(self: *SqlParser) ParserErrors!?SqlExpr {
+        const token = self.peek();
+        std.debug.print("Where {s}", .{token.?.value});
+
+        if (token) |tk| {
+            if ((tk.token_type == TokenType.Keyword) and (std.mem.eql(u8, tk.value, "WHERE"))) {
+                self.position += 1;
+                const expr = try self.parseSelection();
+                if (expr) |e| {
+                    return e.expr;
+                }
+            }
+        }
+        return null;
+    }
 };
 
 test "parse" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     // Read from tokenizer
     var tokens = std.ArrayList(Token).init(allocator);
