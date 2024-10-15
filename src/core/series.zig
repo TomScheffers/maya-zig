@@ -66,7 +66,8 @@ pub fn ArrayType(comptime T: type) type {
                     return std.fmt.bufPrint(&buf, "{d:.2}", .{value});
                 },
                 LargeString => {
-                    return value.fmt();
+                    buf = value.fmt(24);
+                    return &buf;
                 },
                 else => {
                     return "";

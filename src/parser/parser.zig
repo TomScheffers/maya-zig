@@ -15,6 +15,10 @@ const SqlExpr: type = union {
     BinaryExpression: void,
     UnaryExpression: void,
     Cast: []const u8,
+
+    pub fn deinit(self: SqlExpr) void {
+        _ = self;
+    }
 };
 
 const SqlNamedExpr = struct {
@@ -24,14 +28,33 @@ const SqlNamedExpr = struct {
     pub fn fromSqlExpr(expr: SqlExpr) SqlNamedExpr {
         return SqlNamedExpr{ .expr = expr, .name = null };
     }
+
+    pub fn deinit(self: SqlNamedExpr) void {
+        self.expr.deinit();
+    }
 };
 
-const SqlSource: type = union {
+const SqlSource: type = union(enum) {
     Table: SqlTable,
     Frame: *const SqlFrame,
+
+    pub fn deinit(self: SqlSource) void {
+        switch (self) {
+            inline else => |x| x.deinit(),
+        }
+    }
 };
 
-const SqlTable: type = struct { database: ?[]u8, schema: ?[]u8, name: []u8, alias: ?[]u8 };
+const SqlTable: type = struct {
+    database: ?[]u8,
+    schema: ?[]u8,
+    name: []u8,
+    alias: ?[]u8,
+
+    pub fn deinit(self: SqlTable) void {
+        _ = self;
+    }
+};
 
 const SqlJoinMethod: type = enum {
     LEFT,
@@ -57,7 +80,22 @@ const SqlJoinMethod: type = enum {
     }
 };
 
-const SqlJoinFrame: type = struct { right: SqlSource, method: SqlJoinMethod, on: ?SqlNamedExpr, using: ?std.ArrayList([]const u8) };
+const SqlJoinFrame: type = struct {
+    right: SqlSource,
+    method: SqlJoinMethod,
+    on: ?SqlNamedExpr,
+    using: ?std.ArrayList([]const u8),
+
+    pub fn deinit(self: SqlJoinFrame) void {
+        self.right.deinit();
+        if (self.on) |o| {
+            o.deinit();
+        }
+        if (self.using) |u| {
+            u.deinit();
+        }
+    }
+};
 
 const SqlFrame: type = struct {
     selections: std.ArrayList(SqlNamedExpr), // SELECT ...
@@ -66,6 +104,21 @@ const SqlFrame: type = struct {
     where: ?SqlExpr, // WHERE ...
     // group_by: ?std.ArrayList(SqlExpr), // GROUP BY ...
     // having: ?SqlExpr, // HAVING ...
+
+    pub fn deinit(self: SqlFrame) void {
+        for (self.selections.items) |s| {
+            s.deinit();
+        }
+        self.selections.deinit();
+        self.source.deinit();
+        for (self.joins.items) |j| {
+            j.deinit();
+        }
+        self.joins.deinit();
+        if (self.where) |w| {
+            w.deinit();
+        }
+    }
 };
 
 const SqlParser = struct {
@@ -311,6 +364,7 @@ test "parse" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+    // const allocator = std.testing.allocator;
 
     // Read from tokenizer
     var tokens = std.ArrayList(Token).init(allocator);
@@ -325,5 +379,6 @@ test "parse" {
 
     // Parse token into AST
     var parser = SqlParser.init(allocator, try tokens.toOwnedSlice());
-    _ = try parser.parseFrame();
+    const frame = try parser.parseFrame();
+    defer frame.deinit();
 }

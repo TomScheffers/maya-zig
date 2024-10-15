@@ -40,16 +40,23 @@ pub const LargeString: type = struct {
         }
     }
 
-    pub fn fmt(self: Self) []const u8 {
+    pub fn len(self: Self) usize {
+        return @as(usize, self.len);
+    }
+
+    pub fn fmt(self: Self, comptime N: usize) [N]u8 {
+        var buf: [N]u8 = undefined;
         if (self.trailing) |t| {
-            const mx = @min(self.len, 16);
-            var buf: [16]u8 = undefined;
+            const mx = @min(self.len, N);
             @memcpy(buf[0..4], self.prefix[0..]);
             @memcpy(buf[4..mx], t[0 .. mx - 4]);
-            return buf[0..mx];
         } else {
-            return self.prefix[0..self.len];
+            @memcpy(buf[0..4], self.prefix[0..]);
         }
+        for (self.len..N) |i| {
+            buf[i] = ' ';
+        }
+        return buf;
     }
 
     pub fn eql(self: Self, other: Self) bool {
@@ -84,12 +91,14 @@ const String: type = struct {
             var trail: [8]u8 = undefined;
             @memcpy(trail[0 .. str.len - 4], str[4..]);
             result.trailing = trail[0..];
+            std.debug.print("\nTrail: {s}", .{result.trailing.?[0..8]});
             // @as(*[8]u8, @ptrCast(result.trailing)).* = trail;
         } else {
             // For longer strings, store the pointer to the trailing data
             const trail = try allocator.alloc(u8, str.len - 4);
             @memcpy(trail, str[4..]);
             result.trailing = trail.ptr;
+            std.debug.print("\nTrail: {s}", .{result.trailing.?[0..8]});
         }
         return result;
     }
@@ -100,23 +109,24 @@ const String: type = struct {
         }
     }
 
-    pub fn fmt(self: String) []const u8 {
+    pub fn fmt(self: String, comptime N: usize) [N]u8 {
+        var buf: [N]u8 = undefined;
         if (self.len <= 4) {
-            return self.prefix[0..self.len];
+            @memcpy(buf[0..4], self.prefix[0..]);
         } else if (self.len <= 12) {
-            const mx = @min(self.len, 16);
-            var buf: [16]u8 = undefined;
+            const mx = @min(self.len, N);
             @memcpy(buf[0..4], self.prefix[0..]);
             const trail: *[8]u8 = @constCast(@ptrCast(self.trailing.?)); // Trailing is not actually a pointer
             @memcpy(buf[4..mx], trail[0 .. mx - 4]);
-            return buf[0..mx];
         } else {
-            const mx = @min(self.len, 16);
-            var buf: [16]u8 = undefined;
+            const mx = @min(self.len, N);
             @memcpy(buf[0..4], self.prefix[0..]);
-            // @memcpy(buf[4..mx], self.trailing.?[0 .. mx - 4]);
-            return buf[0..mx];
+            @memcpy(buf[4..mx], self.trailing.?[0 .. mx - 4]);
         }
+        for (self.len..N) |i| {
+            buf[i] = ' ';
+        }
+        return buf;
     }
 };
 
@@ -129,15 +139,13 @@ test "mstring" {
 
     const s1 = try LargeString.init("Tom", allocator);
     defer s1.deinit(allocator);
-    const f1 = s1.fmt();
-
-    std.debug.print("\n{s} {d}", .{ f1, f1.len });
+    std.debug.print("\ns1:{s}", .{s1.fmt(16)});
 
     const s2 = try LargeString.init("Hello world", allocator);
     defer s2.deinit(allocator);
-    std.debug.print("\n{s}", .{s2.fmt()});
+    std.debug.print("\ns2:{s}", .{s2.fmt(16)});
 
     const s3 = try LargeString.init("Hello ziggies!!", allocator);
     defer s3.deinit(allocator);
-    std.debug.print("\n{s}", .{s3.fmt()});
+    std.debug.print("\ns3:{s}", .{s3.fmt(16)});
 }
