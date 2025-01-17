@@ -10,6 +10,7 @@ const Series = series.Series;
 const DataType = series.DataType;
 
 pub fn readEncodedData(buf: []u8, encoding: md.Encoding, binary_type: ?md.BinaryType, num_values: usize, allocator: std.mem.Allocator) !Array {
+    // std.debug.print("\nENCODINGS {any}", .{encoding});
     switch (encoding) {
         md.Encoding.PLAIN => {
             switch (binary_type.?) {

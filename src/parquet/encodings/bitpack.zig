@@ -37,7 +37,6 @@ pub fn bitpackDecode(buf: []u8, num_bits: usize, num_values: usize, comptime T: 
     if (num_bits * num_values / 8 > buf.len) return error.BufferTooSmall;
     var result = try allocator.alloc(T, num_values);
     const chunk_size: usize = @bitSizeOf(T);
-    // std.debug.print("Num values {}, Chunk size: {}, Chunks: {} Buf len {}", .{ num_values, chunk_size, num_values / chunk_size, buf.len });
     for (0..num_values / chunk_size) |c| {
         const start_byte = c * chunk_size * num_bits / 8;
         try decodePack(T, buf[start_byte..], result[c * chunk_size .. (c + 1) * chunk_size], num_bits, chunk_size);

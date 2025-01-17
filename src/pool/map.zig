@@ -13,19 +13,19 @@ pub fn load(comptime T: type, mem: []const T, comptime len: u32) @Vector(len, T)
     return v;
 }
 
-inline fn applyUnaryKernel(comptime T: type, from: []const T, to: []T, kernel: fn (u: T) callconv(.Inline) T) void {
+inline fn map_chunk(comptime T: type, from: []const T, to: []T, kernel: fn (u: T) callconv(.Inline) T) void {
     const len = @min(from.len, to.len);
     for (0..len) |i| {
         to[i] = kernel(from[i]);
     }
 }
 
-inline fn map(comptime number_of_threads: usize, comptime T: type, from: []const T, to: []T, kernel: fn (u: T) callconv(.Inline) T) !void {
+fn map(comptime number_of_threads: usize, comptime T: type, from: []T, to: []T, kernel: fn (u: T) callconv(.Inline) T) !void {
     const len = @min(from.len, to.len);
     const len_per_thread = len / number_of_threads;
     var threads: [number_of_threads]Thread = undefined;
     for (0..number_of_threads) |j| {
-        threads[j] = try Thread.spawn(.{}, applyUnaryKernel, .{ T, from[j * len_per_thread .. (j + 1) * len_per_thread], to[j * len_per_thread .. (j + 1) * len_per_thread], kernel });
+        threads[j] = try Thread.spawn(.{}, map_chunk, .{ T, from[j * len_per_thread .. (j + 1) * len_per_thread], to[j * len_per_thread .. (j + 1) * len_per_thread], kernel });
     }
     // join all threads
     for (threads) |thread| {
@@ -33,7 +33,7 @@ inline fn map(comptime number_of_threads: usize, comptime T: type, from: []const
     }
 }
 
-inline fn mapTp(comptime number_of_threads: usize, comptime T: type, from: []const T, to: []T, kernel: fn (u: T) callconv(.Inline) T, pool: *std.Thread.Pool) !void {
+fn mapTp(comptime number_of_threads: usize, comptime T: type, from: []T, to: []T, kernel: fn (u: T) callconv(.Inline) T, pool: *std.Thread.Pool) !void {
     const len = @min(from.len, to.len);
     const len_per_thread = len / number_of_threads;
 
@@ -41,7 +41,7 @@ inline fn mapTp(comptime number_of_threads: usize, comptime T: type, from: []con
     wait_group.reset();
 
     for (0..number_of_threads) |j| {
-        pool.spawnWg(&wait_group, applyUnaryKernel, .{ T, from[j * len_per_thread .. (j + 1) * len_per_thread], to[j * len_per_thread .. (j + 1) * len_per_thread], kernel });
+        pool.spawnWg(&wait_group, map_chunk, .{ T, from[j * len_per_thread .. (j + 1) * len_per_thread], to[j * len_per_thread .. (j + 1) * len_per_thread], kernel });
     }
     // join all threads
     pool.waitAndWork(&wait_group);
@@ -62,6 +62,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     const len = 300_000_000;
+    const cores: comptime_int = 16;
 
     // Threadpool
     const opt = Pool.Options{
@@ -84,18 +85,16 @@ pub fn main() !void {
     try to.appendNTimes(0.0, len);
 
     // Map threaded
-    std.debug.print("Starting", .{});
     var timer = try Timer.start();
     for (0..10) |_| {
-        try map(50, f32, from.items, to.items, testKernel);
+        try map(cores, f32, from.items, to.items, testKernel);
     }
-    std.debug.print("\nTime for map function: {}ms", .{timer.read() / (10 * std.time.ns_per_ms)});
+    std.debug.print("\nTime for map function: {}ms", .{timer.read() / std.time.ns_per_ms});
 
     // Map threaded
-    std.debug.print("Starting", .{});
     timer.reset();
     for (0..10) |_| {
-        try mapTp(500, f32, from.items, to.items, testKernel, &pool);
+        try mapTp(cores, f32, from.items, to.items, testKernel, &pool);
     }
-    std.debug.print("\nTime for map tp function: {}ms", .{timer.read() / (10 * std.time.ns_per_ms)});
+    std.debug.print("\nTime for map tp function: {}ms", .{timer.read() / std.time.ns_per_ms});
 }

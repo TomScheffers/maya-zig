@@ -9,8 +9,14 @@ import polars as pl
 # print(df)
 # print(df.schema)
 
-df = pl.read_parquet("s3://thor-engine-dev/snowflake/tables/stock_current/data_*")
+import time
 
-df = df.cast({"ORG_KEY": pl.Int32, "STORE_KEY": pl.Int32, "SKU_KEY": pl.Int32}).rename(lambda x: x.lower())
+t1 = time.time()
+df = pl.read_parquet("data/stock_current/org_key=0/file.parquet", hive_partitioning=False)
+print(time.time() - t1)
 
-df.write_parquet("data/stock/data.parquet")
+# df = pl.read_parquet("s3://thor-engine-dev/snowflake/tables/stock_current/data_*")
+
+# df = df.cast({"ORG_KEY": pl.Int32, "STORE_KEY": pl.Int32, "SKU_KEY": pl.Int32}).rename(lambda x: x.lower())
+
+# df.write_parquet("data/stock/data.parquet")

@@ -1,4 +1,6 @@
 const std = @import("std");
+const time = std.time;
+const Instant = time.Instant;
 const expect = std.testing.expect;
 const md = @import("metadata.zig");
 const page = @import("page.zig");
@@ -7,7 +9,6 @@ const hlp = @import("../utils/helpers.zig");
 const series = @import("../core/series.zig");
 const frame = @import("../core/frame.zig");
 const Chunk = frame.Chunk;
-
 const Frame = frame.Frame;
 
 const PAR1 = [4]u8{ 'P', 'A', 'R', '1' };
@@ -37,10 +38,17 @@ pub fn readParquet(path: []const u8, allocator: std.mem.Allocator) !Frame {
     try expect(std.mem.eql(u8, file_buffer[0..4], &PAR1));
     try expect(std.mem.eql(u8, file_buffer[(fl - 4)..], &PAR1));
 
+    // Setup pool
+    // var pool: std.Thread.Pool = undefined;
+    // try pool.init(.{
+    //     .allocator = allocator,
+    //     .n_jobs = 8,
+    // });
+    // defer pool.deinit();
+
     // Read metadata
     // https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift#L1163
     // https://parquet.apache.org/docs/file-format/metadata/
-
     const metadata_bytes: u64 = hlp.sliceToInt(file_buffer[(fl - 8)..(fl - 4)]);
     const metadata = try md.parseMetadata(file_buffer[(fl - metadata_bytes - 8)..(fl - 8)], allocator);
     defer metadata.deinit();

@@ -1,4 +1,6 @@
 const std = @import("std");
+const time = std.time;
+const Instant = time.Instant;
 const parquet = @import("parquet/read.zig");
 const enc = @import("parquet/encodings/mod.zig");
 const bitmap = @import("core/bitmap.zig");
@@ -34,9 +36,6 @@ test "bitmap extend" {
     const c = try a._and(n, allocator);
     defer c.deinit();
 }
-
-const time = std.time;
-const Instant = time.Instant;
 
 test "bitpackTime" {
     // const RndGen = std.rand.DefaultPrng;
@@ -89,18 +88,14 @@ test "read" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    // const allocator = std.testing.allocator;
 
-    //const path = "data/stock/store_key=1/00000000.parquet";
     const path = "data/stock_current/org_key=0/file.parquet";
 
     const start = try Instant.now();
-    const frame = try parquet.readParquet(path, allocator);
+    _ = try parquet.readParquet(path, allocator);
     const end = try Instant.now();
     const elapsed: f64 = @floatFromInt(end.since(start));
-    // Print frame
-    try frame.print(allocator);
-    std.debug.print("\nTime elapsed for parquet reading is: {d:.3}ms\n", .{elapsed / time.ns_per_ms});
+    std.debug.print("\nTime elapsed for parquet reading is: {d:.3}s\n", .{elapsed / time.ns_per_s});
 }
 
 test "groupby" {
