@@ -1,6 +1,6 @@
 const std = @import("std");
 const md = @import("metadata.zig");
-const enc = @import("encodings.zig");
+const enc = @import("encodings/mod.zig");
 const cmp = @import("compressions.zig");
 const LargeString = @import("../utils/string.zig").LargeString;
 const series = @import("../core/series.zig");
@@ -17,42 +17,42 @@ pub fn readEncodedData(buf: []u8, encoding: md.Encoding, binary_type: ?md.Binary
                     unreachable;
                 },
                 md.BinaryType.INT32 => {
-                    const arr = try enc.plainDecodeInt(buf, i32, allocator);
+                    const arr = try enc.plain.plainDecodeInt(buf, i32, allocator);
                     return Array.fromArrayList(i32, arr);
                 },
                 md.BinaryType.INT64 => {
-                    const arr = try enc.plainDecodeInt(buf, i64, allocator);
+                    const arr = try enc.plain.plainDecodeInt(buf, i64, allocator);
                     return Array.fromArrayList(i64, arr);
                 },
                 md.BinaryType.INT96 => {
                     unreachable;
                 },
                 md.BinaryType.FLOAT => {
-                    const arr = try enc.plainDecodeFloat(buf, f32, allocator);
+                    const arr = try enc.plain.plainDecodeFloat(buf, f32, allocator);
                     return Array.fromArrayList(f32, arr);
                 },
                 md.BinaryType.DOUBLE => {
-                    const arr = try enc.plainDecodeFloat(buf, f64, allocator);
+                    const arr = try enc.plain.plainDecodeFloat(buf, f64, allocator);
                     return Array.fromArrayList(f64, arr);
                 },
                 md.BinaryType.BYTE_ARRAY => {
-                    const arr = try enc.plainDecodeBytes(buf, num_values, allocator);
+                    const arr = try enc.plain.plainDecodeBytes(buf, num_values, allocator);
                     return Array.fromArrayList(LargeString, arr);
                 },
                 md.BinaryType.FIXED_LEN_BYTE_ARRAY => {
-                    const arr = try enc.plainDecodeFixedBytes(buf, num_values, allocator);
+                    const arr = try enc.plain.plainDecodeFixedBytes(buf, num_values, allocator);
                     return Array.fromArrayList(LargeString, arr);
                 },
             }
         },
         md.Encoding.RLE => {
-            const arr = try enc.rleHybridDecode(buf, 1, num_values, u8, allocator);
+            const arr = try enc.rle.rleHybridDecode(buf, 1, num_values, u8, allocator);
             return Array.fromArrayList(u8, arr);
         },
         md.Encoding.RLE_DICTIONARY => {
             // FIRST BYTE CONTAINS SIZE OF ENCODED BITS
             const num_bits: u5 = @intCast(buf[0]);
-            const arr = try enc.rleHybridDecode(buf[1..], num_bits, num_values, u32, allocator);
+            const arr = try enc.rle.rleHybridDecode(buf[1..], num_bits, num_values, u32, allocator);
             return Array.fromArrayList(u32, arr);
         },
         else => {
@@ -63,7 +63,7 @@ pub fn readEncodedData(buf: []u8, encoding: md.Encoding, binary_type: ?md.Binary
 }
 
 pub fn readDefinitionLevels(buf: []u8, num_values: usize, allocator: std.mem.Allocator) !Bitmap {
-    const arr = try enc.rleBitmapDecode(buf, num_values, allocator);
+    const arr = try enc.rle.rleBitmapDecode(buf, num_values, allocator);
     return Bitmap{ .data = arr, .len = num_values };
 }
 
@@ -82,8 +82,7 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
         return error.ColumnNotFound;
     };
     const binary_type = schema_element.binary_type.?;
-
-    std.debug.print("\n\nCOLUMN CHUNK {s} {any} {any}", .{ column_chunk.meta_data.?.path_in_schema.items[0], binary_type, schema_element.converted_type });
+    // std.debug.print("\n\nCOLUMN CHUNK {s} {any} {any}", .{ column_chunk.meta_data.?.path_in_schema.items[0], binary_type, schema_element.converted_type });
 
     // Extract page content
     var dictionary: ?Array = null;
@@ -126,15 +125,12 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
                     .OPTIONAL, .REPEATED => {
                         const vbuf = @as(*[4]u8, @ptrCast(ucb[0..4].ptr)).*;
                         const length = std.mem.readInt(u32, &vbuf, std.builtin.Endian.little);
-                        std.debug.print("Length of DL {}", .{length});
                         validity = try readDefinitionLevels(ucb[offset + 4 .. offset + 4 + length], num_value, allocator);
-                        std.debug.print("DL NOT NULL COUNT = {}", .{validity.?.countTrue()});
                         offset += 4 + length;
                     },
                     else => {},
                 }
 
-                std.debug.print("\nPage bytes: {d} {d} {any} {d} {any}", .{ ucb.len, ucb[offset..].len, page_header.data_page_header.?.encoding, offset, binary_type });
                 const page = try readEncodedData(ucb[offset..], page_header.data_page_header.?.encoding, binary_type, num_value, allocator);
 
                 // Set validity of page
@@ -193,7 +189,6 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
     // Map dictionary to values when binary type is smaller then 4 bytes (u32 is used for idxs)
     switch (s.data_type) {
         .Boolean, .Int8, .Int16, .Int32, .Int64, .UInt8, .UInt16, .UInt32, .UInt64 => {
-            std.debug.print("Unmapping dictionary for column {s}", .{s.name});
             try s.unmapDictionary();
         },
         else => {},

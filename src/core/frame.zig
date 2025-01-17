@@ -65,7 +65,7 @@ pub const Frame: type = struct {
         } else if (names.items.len == 1) {
             const column: Series = try self.chunks.items[0].get_column(names.items[0]);
             const array_map: ArrayMap = try ArrayMap.fromArray(column.data, allocator);
-            _ = array_map;
+            std.debug.print("\nGroup by values: {any}", .{array_map.keys.Int64.data.items});
         } else {
             // TODO: Implement fast path when all columns are dictionaries
             for (names.items) |name| {
