@@ -69,10 +69,6 @@ pub fn readDefinitionLevels(buf: []u8, num_values: usize, allocator: std.mem.All
 }
 
 pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator) !Series {
-    const s1: usize = @intCast(column_chunk.meta_data.?.data_page_offset);
-    const sz: usize = @intCast(column_chunk.meta_data.?.total_compressed_size);
-    const ccb = buf[(s1)..(s1 + sz)];
-
     // Find binary type for column
     const schema_element: md.SchemaElement = brk: {
         for (metadata.schema.items) |s| {
@@ -90,15 +86,15 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
     var pages = std.ArrayList(Series).init(allocator);
 
     var page_offset: usize = 0;
-    while (page_offset < sz) {
+    while (page_offset < buf.len) {
         // Read page header
-        const ph_output = try md.parsePageHeader(ccb[page_offset..], allocator);
+        const ph_output = try md.parsePageHeader(buf[page_offset..], allocator);
 
         const psz = @as(usize, @intCast(ph_output.page_header.compressed_page_size));
         page_offset += ph_output.header_size;
 
         // Read page
-        const pbuf = ccb[page_offset..(page_offset + psz)];
+        const pbuf = buf[page_offset..(page_offset + psz)];
         const page_header = ph_output.page_header;
         switch (page_header.page_type) {
             md.PageType.DATA_PAGE => {

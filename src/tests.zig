@@ -92,9 +92,10 @@ test "read" {
     const path = "data/stock_current/org_key=0/file.parquet";
 
     const start = try Instant.now();
-    _ = try parquet.readParquet(path, allocator);
+    const frame = try parquet.readParquet(path, allocator);
     const end = try Instant.now();
     const elapsed: f64 = @floatFromInt(end.since(start));
+    _ = try frame.print(allocator);
     std.debug.print("\nTime elapsed for parquet reading is: {d:.3}s\n", .{elapsed / time.ns_per_s});
 }
 

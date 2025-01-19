@@ -13,12 +13,56 @@ const Frame = frame.Frame;
 
 const PAR1 = [4]u8{ 'P', 'A', 'R', '1' };
 
+pub fn readColumnChunkWg(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator, result: *series.Series, wg: *std.Thread.WaitGroup) !void {
+    wg.start();
+    defer wg.finish();
+    const column = try page.readColumnChunk(buf, column_chunk, metadata, allocator);
+    result.* = column;
+}
+
+pub fn readParquetDataThreaded(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
+    var chunks = std.ArrayList(Chunk).init(allocator);
+    for (metadata.row_groups.items) |rg| {
+        var thread_handles = try allocator.alloc(std.Thread, rg.columns.items.len);
+        const results = try allocator.alloc(series.Series, rg.columns.items.len);
+        var wait_group: std.Thread.WaitGroup = .{};
+
+        var thread_safe_arena: std.heap.ThreadSafeAllocator = .{
+            .child_allocator = allocator,
+        };
+        const arena = thread_safe_arena.allocator();
+
+        for (rg.columns.items, 0..) |column_chunk, i| {
+            const s1: usize = @intCast(column_chunk.meta_data.?.data_page_offset);
+            const sz: usize = @intCast(column_chunk.meta_data.?.total_compressed_size);
+            thread_handles[i] = try std.Thread.spawn(
+                .{},
+                readColumnChunkWg,
+                .{ buf[s1 .. s1 + sz], column_chunk, metadata, arena, &results[i], &wait_group },
+            );
+        }
+        wait_group.wait();
+        for (thread_handles) |th| {
+            th.join();
+        }
+
+        var columns = std.ArrayList(series.Series).init(allocator);
+        for (results) |val| {
+            try columns.append(val);
+        }
+        try chunks.append(Chunk{ .columns = columns });
+    }
+    return Frame{ .chunks = chunks };
+}
+
 pub fn readParquetData(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
     var chunks = std.ArrayList(Chunk).init(allocator);
     for (metadata.row_groups.items) |rg| {
         var columns = std.ArrayList(series.Series).init(allocator);
-        for (rg.columns.items) |cc| {
-            const column = try page.readColumnChunk(buf, cc, metadata, allocator);
+        for (rg.columns.items) |column_chunk| {
+            const s1: usize = @intCast(column_chunk.meta_data.?.data_page_offset);
+            const sz: usize = @intCast(column_chunk.meta_data.?.total_compressed_size);
+            const column = try page.readColumnChunk(buf[s1 .. s1 + sz], column_chunk, metadata, allocator);
             try columns.append(column);
         }
         try chunks.append(Chunk{ .columns = columns });
@@ -54,6 +98,6 @@ pub fn readParquet(path: []const u8, allocator: std.mem.Allocator) !Frame {
     defer metadata.deinit();
 
     // Read data
-    const df = try readParquetData(file_buffer, metadata, allocator);
+    const df = try readParquetDataThreaded(file_buffer, metadata, allocator);
     return df;
 }
