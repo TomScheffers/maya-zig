@@ -11,9 +11,11 @@ import polars as pl
 
 import time
 
-t1 = time.time()
-df = pl.read_parquet("data/stock_current/org_key=0/file.parquet", hive_partitioning=False)
-print(time.time() - t1)
+df = pl.scan_parquet("data/stock_current/org_key=0/file.parquet", hive_partitioning=False)
+for col in df.columns:
+    t1 = time.time()
+    df = pl.scan_parquet("data/stock_current/org_key=0/file.parquet", hive_partitioning=False).select([col]).collect()
+    print(col, time.time() - t1)
 
 # df = pl.read_parquet("s3://thor-engine-dev/snowflake/tables/stock_current/data_*")
 

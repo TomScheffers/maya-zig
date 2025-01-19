@@ -9,6 +9,9 @@ const Bitmap = series.Bitmap;
 const Series = series.Series;
 const DataType = series.DataType;
 
+const time = std.time;
+const Instant = time.Instant;
+
 pub fn readEncodedData(buf: []u8, encoding: md.Encoding, binary_type: ?md.BinaryType, num_values: usize, allocator: std.mem.Allocator) !Array {
     // std.debug.print("\nENCODINGS {any}", .{encoding});
     switch (encoding) {
@@ -69,6 +72,8 @@ pub fn readDefinitionLevels(buf: []u8, num_values: usize, allocator: std.mem.All
 }
 
 pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator) !Series {
+    const start = try Instant.now();
+
     // Find binary type for column
     const schema_element: md.SchemaElement = brk: {
         for (metadata.schema.items) |s| {
@@ -191,7 +196,14 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
         else => {},
     }
 
-    std.debug.print("\nName of series {s} {}", .{ s.name, s.data_type });
+    const end = try Instant.now();
+    const elapsed1: f64 = @floatFromInt(end.since(start));
+
+    if (dictionary) |dict| {
+        std.debug.print("\nReading series {s} with dict len {d} took: {d:.3}ms\n", .{ s.name, dict.len(), elapsed1 / time.ns_per_s });
+    } else {
+        std.debug.print("\nReading series {s} took: {d:.3}ms\n", .{ s.name, elapsed1 / time.ns_per_s });
+    }
 
     return s;
 }

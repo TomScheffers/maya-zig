@@ -1,6 +1,4 @@
 const std = @import("std");
-const time = std.time;
-const Instant = time.Instant;
 const expect = std.testing.expect;
 const md = @import("metadata.zig");
 const page = @import("page.zig");
@@ -20,17 +18,18 @@ pub fn readColumnChunkWg(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.M
     result.* = column;
 }
 
-pub fn readParquetDataThreaded(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
+pub fn readParquetData(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
+    // Make allocator thread safe
+    var thread_safe_arena: std.heap.ThreadSafeAllocator = .{
+        .child_allocator = allocator,
+    };
+    const arena = thread_safe_arena.allocator();
+
     var chunks = std.ArrayList(Chunk).init(allocator);
     for (metadata.row_groups.items) |rg| {
+        var wait_group: std.Thread.WaitGroup = .{};
         var thread_handles = try allocator.alloc(std.Thread, rg.columns.items.len);
         const results = try allocator.alloc(series.Series, rg.columns.items.len);
-        var wait_group: std.Thread.WaitGroup = .{};
-
-        var thread_safe_arena: std.heap.ThreadSafeAllocator = .{
-            .child_allocator = allocator,
-        };
-        const arena = thread_safe_arena.allocator();
 
         for (rg.columns.items, 0..) |column_chunk, i| {
             const s1: usize = @intCast(column_chunk.meta_data.?.data_page_offset);
@@ -55,7 +54,7 @@ pub fn readParquetDataThreaded(buf: []u8, metadata: md.MetaData, allocator: std.
     return Frame{ .chunks = chunks };
 }
 
-pub fn readParquetData(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
+pub fn readParquetDataOld(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
     var chunks = std.ArrayList(Chunk).init(allocator);
     for (metadata.row_groups.items) |rg| {
         var columns = std.ArrayList(series.Series).init(allocator);
@@ -82,14 +81,6 @@ pub fn readParquet(path: []const u8, allocator: std.mem.Allocator) !Frame {
     try expect(std.mem.eql(u8, file_buffer[0..4], &PAR1));
     try expect(std.mem.eql(u8, file_buffer[(fl - 4)..], &PAR1));
 
-    // Setup pool
-    // var pool: std.Thread.Pool = undefined;
-    // try pool.init(.{
-    //     .allocator = allocator,
-    //     .n_jobs = 8,
-    // });
-    // defer pool.deinit();
-
     // Read metadata
     // https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift#L1163
     // https://parquet.apache.org/docs/file-format/metadata/
@@ -98,6 +89,6 @@ pub fn readParquet(path: []const u8, allocator: std.mem.Allocator) !Frame {
     defer metadata.deinit();
 
     // Read data
-    const df = try readParquetDataThreaded(file_buffer, metadata, allocator);
+    const df = try readParquetData(file_buffer, metadata, allocator);
     return df;
 }
