@@ -372,7 +372,7 @@ fn parseColumnChunks(data: thift.TValue, allocator: Allocator) !std.ArrayList(Co
     return column_chunks;
 }
 
-const RowGroup: type = struct {
+pub const RowGroup: type = struct {
     columns: std.ArrayList(ColumnChunk),
     total_byte_size: i64,
     num_rows: i64,

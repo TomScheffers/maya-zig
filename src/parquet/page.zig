@@ -71,6 +71,72 @@ pub fn readDefinitionLevels(buf: []u8, num_values: usize, allocator: std.mem.All
     return Bitmap{ .data = arr, .len = num_values };
 }
 
+pub fn readDataPage(buf: []u8, column_chunk: md.ColumnChunk, page_header: md.PageHeader, schema_element: md.SchemaElement, allocator: std.mem.Allocator) !Series {
+    const num_value: usize = @intCast(page_header.data_page_header.?.num_values);
+    const ucb = try cmp.readZstd(buf[0..], allocator);
+    defer allocator.free(ucb);
+
+    // Repetition levels, Definition levels and then Encoded values
+    var offset: usize = 0;
+
+    // Repetition levels
+    switch (schema_element.repetition_type.?) {
+        .REPEATED => {
+            const vbuf = @as(*[4]u8, @ptrCast(ucb[0..4].ptr)).*;
+            const length = std.mem.readInt(u32, &vbuf, std.builtin.Endian.little);
+            _ = try readDefinitionLevels(ucb[4 .. 4 + length], num_value, allocator);
+            offset += 4 + length;
+        },
+        else => {},
+    }
+
+    // Definition levels
+    var validity: ?Bitmap = null;
+    switch (schema_element.repetition_type.?) {
+        .OPTIONAL, .REPEATED => {
+            const vbuf = @as(*[4]u8, @ptrCast(ucb[0..4].ptr)).*;
+            const length = std.mem.readInt(u32, &vbuf, std.builtin.Endian.little);
+            validity = try readDefinitionLevels(ucb[offset + 4 .. offset + 4 + length], num_value, allocator);
+            offset += 4 + length;
+        },
+        else => {},
+    }
+
+    const page = try readEncodedData(ucb[offset..], page_header.data_page_header.?.encoding, schema_element.binary_type.?, num_value, allocator);
+
+    // Set validity of page
+    const s = try Series.init(column_chunk.meta_data.?.path_in_schema.items[0], DataType.fromSchemaElement(schema_element), page, null, null, allocator);
+    return s;
+}
+
+pub fn readDataPageV2(buf: []u8, column_chunk: md.ColumnChunk, page_header: md.PageHeader, schema_element: md.SchemaElement, allocator: std.mem.Allocator) !Series {
+    const num_value: usize = @intCast(page_header.data_page_header_v2.?.num_values);
+
+    // Definition levels https://blog.x.com/engineering/en_us/a/2013/dremel-made-simple-with-parquet
+    const dlb: usize = @intCast(page_header.data_page_header_v2.?.definition_levels_byte_length);
+    const validity = try readDefinitionLevels(buf[0..dlb], num_value, allocator);
+
+    // Repetition levels
+    const rlb: usize = @intCast(page_header.data_page_header_v2.?.repetition_levels_byte_length);
+
+    // Compressed data page
+    const ucb = try cmp.readZstd(buf[dlb + rlb ..], allocator);
+    defer allocator.free(ucb);
+
+    const page = try readEncodedData(ucb, page_header.data_page_header_v2.?.encoding, schema_element.binary_type, num_value, allocator);
+
+    // Set validity of page
+    const s = try Series.init(column_chunk.meta_data.?.path_in_schema.items[0], DataType.fromSchemaElement(schema_element), page, null, validity, allocator);
+    return s;
+}
+
+pub fn readDictionaryPage(buf: []u8, page_header: md.PageHeader, binary_type: md.BinaryType, allocator: std.mem.Allocator) !Array {
+    const ucb = try cmp.readZstd(buf[0..], allocator);
+    defer allocator.free(ucb);
+    const num_value: usize = @intCast(page_header.dictionary_page_header.?.num_value);
+    return try readEncodedData(ucb, page_header.dictionary_page_header.?.encoding, binary_type, num_value, allocator);
+}
+
 pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator) !Series {
     const start = try Instant.now();
 
@@ -89,7 +155,6 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
     // Extract page content
     var dictionary: ?Array = null;
     var pages = std.ArrayList(Series).init(allocator);
-
     var page_offset: usize = 0;
     while (page_offset < buf.len) {
         // Read page header
@@ -99,74 +164,21 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
         page_offset += ph_output.header_size;
 
         // Read page
-        const pbuf = buf[page_offset..(page_offset + psz)];
         const page_header = ph_output.page_header;
         switch (page_header.page_type) {
             md.PageType.DATA_PAGE => {
-                const num_value: usize = @intCast(page_header.data_page_header.?.num_values);
-                const ucb = try cmp.readZstd(pbuf[0..], allocator);
-                defer allocator.free(ucb);
-
-                // Repetition levels, Definition levels and then Encoded values
-                var offset: usize = 0;
-
-                // Repetition levels
-                switch (schema_element.repetition_type.?) {
-                    .REPEATED => {
-                        const vbuf = @as(*[4]u8, @ptrCast(ucb[0..4].ptr)).*;
-                        const length = std.mem.readInt(u32, &vbuf, std.builtin.Endian.little);
-                        _ = try readDefinitionLevels(ucb[4 .. 4 + length], num_value, allocator);
-                        offset += 4 + length;
-                    },
-                    else => {},
-                }
-
-                // Definition levels
-                var validity: ?Bitmap = null;
-                switch (schema_element.repetition_type.?) {
-                    .OPTIONAL, .REPEATED => {
-                        const vbuf = @as(*[4]u8, @ptrCast(ucb[0..4].ptr)).*;
-                        const length = std.mem.readInt(u32, &vbuf, std.builtin.Endian.little);
-                        validity = try readDefinitionLevels(ucb[offset + 4 .. offset + 4 + length], num_value, allocator);
-                        offset += 4 + length;
-                    },
-                    else => {},
-                }
-
-                const page = try readEncodedData(ucb[offset..], page_header.data_page_header.?.encoding, binary_type, num_value, allocator);
-
-                // Set validity of page
-                const s = try Series.init(column_chunk.meta_data.?.path_in_schema.items[0], DataType.fromSchemaElement(schema_element), page, null, null, allocator);
-                try pages.append(s);
+                const page = try readDataPage(buf[page_offset .. page_offset + psz], column_chunk, ph_output.page_header, schema_element, allocator);
+                try pages.append(page);
+            },
+            md.PageType.DATA_PAGE_V2 => {
+                const page = try readDataPageV2(buf[page_offset .. page_offset + psz], column_chunk, ph_output.page_header, schema_element, allocator);
+                try pages.append(page);
             },
             md.PageType.INDEX_PAGE => {
                 unreachable;
             },
             md.PageType.DICTIONARY_PAGE => {
-                const ucb = try cmp.readZstd(pbuf[0..], allocator);
-                defer allocator.free(ucb);
-                const num_value: usize = @intCast(page_header.dictionary_page_header.?.num_value);
-                dictionary = try readEncodedData(ucb, page_header.dictionary_page_header.?.encoding, binary_type, num_value, allocator);
-            },
-            md.PageType.DATA_PAGE_V2 => {
-                const num_value: usize = @intCast(page_header.data_page_header_v2.?.num_values);
-
-                // Definition levels https://blog.x.com/engineering/en_us/a/2013/dremel-made-simple-with-parquet
-                const dlb: usize = @intCast(page_header.data_page_header_v2.?.definition_levels_byte_length);
-                const validity = try readDefinitionLevels(pbuf[0..dlb], num_value, allocator);
-
-                // Repetition levels
-                const rlb: usize = @intCast(page_header.data_page_header_v2.?.repetition_levels_byte_length);
-
-                // Compressed data page
-                const ucb = try cmp.readZstd(pbuf[(dlb + rlb)..], allocator);
-                defer allocator.free(ucb);
-
-                const page = try readEncodedData(ucb, page_header.data_page_header_v2.?.encoding, binary_type, num_value, allocator);
-
-                // Set validity of page
-                const s = try Series.init(column_chunk.meta_data.?.path_in_schema.items[0], DataType.fromSchemaElement(schema_element), page, null, validity, allocator);
-                try pages.append(s);
+                dictionary = try readDictionaryPage(buf[page_offset .. page_offset + psz], ph_output.page_header, binary_type, allocator);
             },
         }
         page_offset += psz;
@@ -200,9 +212,9 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
     const elapsed1: f64 = @floatFromInt(end.since(start));
 
     if (dictionary) |dict| {
-        std.debug.print("\nReading series {s} with dict len {d} took: {d:.3}ms\n", .{ s.name, dict.len(), elapsed1 / time.ns_per_s });
+        std.debug.print("\nReading series {s} with {d} pages with dict len {d} took: {d:.3}ms\n", .{ s.name, pages.items.len, dict.len(), elapsed1 / time.ns_per_s });
     } else {
-        std.debug.print("\nReading series {s} took: {d:.3}ms\n", .{ s.name, elapsed1 / time.ns_per_s });
+        std.debug.print("\nReading series {s} with {d} pages took: {d:.3}ms\n", .{ s.name, pages.items.len, elapsed1 / time.ns_per_s });
     }
 
     return s;

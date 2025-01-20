@@ -18,6 +18,39 @@ pub fn readColumnChunkWg(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.M
     result.* = column;
 }
 
+pub fn readRowGroup(buf: []u8, row_group: md.RowGroup, metadata: md.MetaData, allocator: std.mem.Allocator) !Chunk {
+    var wait_group: std.Thread.WaitGroup = .{};
+    var thread_handles = try allocator.alloc(std.Thread, row_group.columns.items.len);
+    const results = try allocator.alloc(series.Series, row_group.columns.items.len);
+
+    for (row_group.columns.items, 0..) |column_chunk, i| {
+        const s1: usize = @intCast(column_chunk.meta_data.?.data_page_offset);
+        const sz: usize = @intCast(column_chunk.meta_data.?.total_compressed_size);
+        thread_handles[i] = try std.Thread.spawn(
+            .{},
+            readColumnChunkWg,
+            .{ buf[s1 .. s1 + sz], column_chunk, metadata, allocator, &results[i], &wait_group },
+        );
+    }
+    wait_group.wait();
+    for (thread_handles) |th| {
+        th.join();
+    }
+
+    var columns = std.ArrayList(series.Series).init(allocator);
+    for (results) |val| {
+        try columns.append(val);
+    }
+    return Chunk{ .columns = columns };
+}
+
+pub fn readRowGroupWg(buf: []u8, row_group: md.RowGroup, metadata: md.MetaData, allocator: std.mem.Allocator, result: *Chunk, wg: *std.Thread.WaitGroup) !void {
+    wg.start();
+    defer wg.finish();
+    const column = try readRowGroup(buf, row_group, metadata, allocator);
+    result.* = column;
+}
+
 pub fn readParquetData(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
     // Make allocator thread safe
     var thread_safe_arena: std.heap.ThreadSafeAllocator = .{
@@ -25,31 +58,27 @@ pub fn readParquetData(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allo
     };
     const arena = thread_safe_arena.allocator();
 
+    // Threading prep
+    var wait_group: std.Thread.WaitGroup = .{};
+    var thread_handles = try allocator.alloc(std.Thread, metadata.row_groups.items.len);
+    const results = try allocator.alloc(Chunk, metadata.row_groups.items.len);
+
+    // Read row groups into chunks into frame
+    for (metadata.row_groups.items, 0..) |row_group, i| {
+        thread_handles[i] = try std.Thread.spawn(
+            .{},
+            readRowGroupWg,
+            .{ buf, row_group, metadata, arena, &results[i], &wait_group },
+        );
+    }
+    wait_group.wait();
+    for (thread_handles) |th| {
+        th.join();
+    }
+
     var chunks = std.ArrayList(Chunk).init(allocator);
-    for (metadata.row_groups.items) |rg| {
-        var wait_group: std.Thread.WaitGroup = .{};
-        var thread_handles = try allocator.alloc(std.Thread, rg.columns.items.len);
-        const results = try allocator.alloc(series.Series, rg.columns.items.len);
-
-        for (rg.columns.items, 0..) |column_chunk, i| {
-            const s1: usize = @intCast(column_chunk.meta_data.?.data_page_offset);
-            const sz: usize = @intCast(column_chunk.meta_data.?.total_compressed_size);
-            thread_handles[i] = try std.Thread.spawn(
-                .{},
-                readColumnChunkWg,
-                .{ buf[s1 .. s1 + sz], column_chunk, metadata, arena, &results[i], &wait_group },
-            );
-        }
-        wait_group.wait();
-        for (thread_handles) |th| {
-            th.join();
-        }
-
-        var columns = std.ArrayList(series.Series).init(allocator);
-        for (results) |val| {
-            try columns.append(val);
-        }
-        try chunks.append(Chunk{ .columns = columns });
+    for (results) |val| {
+        try chunks.append(val);
     }
     return Frame{ .chunks = chunks };
 }
