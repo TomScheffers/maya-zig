@@ -137,6 +137,27 @@ pub fn readDictionaryPage(buf: []u8, page_header: md.PageHeader, binary_type: md
     return try readEncodedData(ucb, page_header.dictionary_page_header.?.encoding, binary_type, num_value, allocator);
 }
 
+const Page: type = union(md.PageType) { DATA_PAGE: Series, INDEX_PAGE: void, DICTIONARY_PAGE: Array, DATA_PAGE_V2: Series };
+
+pub fn readPage(buf: []u8, column_chunk: md.ColumnChunk, page_header: md.PageHeader, schema_element: md.SchemaElement, allocator: std.mem.Allocator, result: *Page, wg: *std.Thread.WaitGroup) !void {
+    wg.start();
+    defer wg.finish();
+    switch (page_header.page_type) {
+        md.PageType.DATA_PAGE => {
+            result.* = Page{ .DATA_PAGE = try readDataPage(buf, column_chunk, page_header, schema_element, allocator) };
+        },
+        md.PageType.DATA_PAGE_V2 => {
+            result.* = Page{ .DATA_PAGE_V2 = try readDataPageV2(buf, column_chunk, page_header, schema_element, allocator) };
+        },
+        md.PageType.INDEX_PAGE => {
+            result.* = Page{ .INDEX_PAGE = undefined };
+        },
+        md.PageType.DICTIONARY_PAGE => {
+            result.* = Page{ .DICTIONARY_PAGE = try readDictionaryPage(buf, page_header, schema_element.binary_type.?, allocator) };
+        },
+    }
+}
+
 pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator) !Series {
     const start = try Instant.now();
 
@@ -149,46 +170,60 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
         }
         return error.ColumnNotFound;
     };
-    const binary_type = schema_element.binary_type.?;
-    // std.debug.print("\n\nCOLUMN CHUNK {s} {any} {any}", .{ column_chunk.meta_data.?.path_in_schema.items[0], binary_type, schema_element.converted_type });
 
-    // Extract page content
-    var dictionary: ?Array = null;
-    var pages = std.ArrayList(Series).init(allocator);
+    // Extract page contents
+    var wait_group: std.Thread.WaitGroup = .{};
+    var thread_handles = std.ArrayList(std.Thread).init(allocator);
+    var pages = std.ArrayList(Page).init(allocator);
+
     var page_offset: usize = 0;
     while (page_offset < buf.len) {
-        // Read page header
         const ph_output = try md.parsePageHeader(buf[page_offset..], allocator);
-
         const psz = @as(usize, @intCast(ph_output.page_header.compressed_page_size));
         page_offset += ph_output.header_size;
-
-        // Read page
-        const page_header = ph_output.page_header;
-        switch (page_header.page_type) {
-            md.PageType.DATA_PAGE => {
-                const page = try readDataPage(buf[page_offset .. page_offset + psz], column_chunk, ph_output.page_header, schema_element, allocator);
-                try pages.append(page);
-            },
-            md.PageType.DATA_PAGE_V2 => {
-                const page = try readDataPageV2(buf[page_offset .. page_offset + psz], column_chunk, ph_output.page_header, schema_element, allocator);
-                try pages.append(page);
-            },
-            md.PageType.INDEX_PAGE => {
-                unreachable;
-            },
-            md.PageType.DICTIONARY_PAGE => {
-                dictionary = try readDictionaryPage(buf[page_offset .. page_offset + psz], ph_output.page_header, binary_type, allocator);
-            },
-        }
+        try pages.append(undefined);
+        try thread_handles.append(try std.Thread.spawn(
+            .{},
+            readPage,
+            .{ buf[page_offset .. page_offset + psz], column_chunk, ph_output.page_header, schema_element, allocator, &pages.items[pages.items.len - 1], &wait_group },
+        ));
         page_offset += psz;
     }
 
+    wait_group.wait();
+    for (thread_handles.items) |th| {
+        th.join();
+    }
+
+    // Unpack pages
+    var dictionary: ?Array = null;
+    var data = std.ArrayList(Series).init(allocator);
+    for (pages.items) |page| {
+        switch (page) {
+            md.PageType.DATA_PAGE => {
+                if (page.DATA_PAGE.len() > 0) {
+                    try data.append(page.DATA_PAGE);
+                }
+            },
+            md.PageType.DATA_PAGE_V2 => {
+                if (page.DATA_PAGE_V2.len() > 0) {
+                    try data.append(page.DATA_PAGE_V2);
+                }
+            },
+            md.PageType.DICTIONARY_PAGE => {
+                dictionary = page.DICTIONARY_PAGE;
+            },
+            md.PageType.INDEX_PAGE => unreachable,
+        }
+    }
+    // for (data.items) |d| {
+    //     std.debug.print("\nFound page data: {s} with len {d} Series type {any} Binary type {any}", .{ column_chunk.meta_data.?.path_in_schema.items[0], d.len(), d.data_type, schema_element.binary_type.? });
+    // }
+
     // Concatenate pages
-    var s: Series = pages.items[0];
-    var i: usize = 1;
-    while (i < pages.items.len) : (i += 1) {
-        try s.extend(&pages.items[i]);
+    var s: Series = data.items[0];
+    for (1..data.items.len) |i| {
+        try s.extend(&data.items[i]);
     }
 
     if (s.len() != column_chunk.meta_data.?.num_values) {
