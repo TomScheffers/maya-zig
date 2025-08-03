@@ -41,17 +41,9 @@ pub fn main() !void {
     const end_selective = std.time.nanoTimestamp();
     defer frame_sel_perf.deinit();
 
-    const start_full = std.time.nanoTimestamp();
-    var frame_full = try parquet.readParquet(path, allocator);
-    const end_full = std.time.nanoTimestamp();
-    defer frame_full.deinit();
-
     const selective_time: f64 = @floatFromInt(end_selective - start_selective);
-    const full_time: f64 = @floatFromInt(end_full - start_full);
 
     std.debug.print("Selective reading time: {d:.3}ms\n", .{selective_time / 1_000_000});
-    std.debug.print("Full file reading time: {d:.3}ms\n", .{full_time / 1_000_000});
-    std.debug.print("Performance improvement: {d:.1}x faster\n", .{full_time / selective_time});
 
     // Demo 4: Advanced usage with ParquetReader for multiple operations
     std.debug.print("\n=== Advanced Usage with ParquetReader ===\n", .{});
