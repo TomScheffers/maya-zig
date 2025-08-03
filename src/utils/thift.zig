@@ -26,12 +26,26 @@ pub const TValue: type = union(TValueTag) {
 
     pub fn deinit(self: TValue) void {
         switch (self) {
-            .LIST, .SET => |x| x.deinit(),
+            .LIST, .SET => |x| {
+                for (x.items) |item| {
+                    item.deinit();
+                }
+                x.deinit();
+            },
             .MAP => |x| {
+                for (x.keys.items) |key| {
+                    key.deinit();
+                }
+                for (x.values.items) |value| {
+                    value.deinit();
+                }
                 x.keys.deinit();
                 x.values.deinit();
             },
             .STRUCT => |x| {
+                for (x.values.items) |value| {
+                    value.deinit();
+                }
                 x.offsets.deinit();
                 x.values.deinit();
             },
@@ -112,9 +126,38 @@ pub fn print_tree(node: *const TValue, depth: u8) void {
     }
 }
 
+// Configuration for parsing behavior
+pub const ParseConfig = struct {
+    max_depth: u32 = 100,
+    max_list_size: usize = 100_000,
+    max_map_size: usize = 100_000,
+    max_struct_fields: usize = 10_000,
+    copy_binary_data: bool = false,
+};
+
+// Error types for better error handling
+pub const ThriftError = error{
+    BufferUnderflow,
+    ListTooLarge,
+    MapTooLarge,
+    TooManyFields,
+    UnsupportedFieldType,
+    MaxDepthExceeded,
+    OutOfMemory,
+    InvalidVarint,
+};
+
 pub fn procceedNode(data: []u8, offset: *usize, field_type: u4, allocator: Allocator) !TValue {
+    return procceedNodeWithConfig(data, offset, field_type, allocator, ParseConfig{}, 0);
+}
+
+pub fn procceedNodeWithConfig(data: []u8, offset: *usize, field_type: u4, allocator: Allocator, config: ParseConfig, depth: u32) ThriftError!TValue {
+    if (depth >= config.max_depth) {
+        return ThriftError.MaxDepthExceeded;
+    }
+
     if (data.len < offset.*) {
-        return TValue{ .NULL = undefined };
+        return ThriftError.BufferUnderflow;
     }
 
     switch (field_type) {
@@ -125,49 +168,73 @@ pub fn procceedNode(data: []u8, offset: *usize, field_type: u4, allocator: Alloc
             return TValue{ .BOOL = false };
         },
         3 => {
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             const r = varint.decodeZigzagVarint(data[(offset.*)..]);
             offset.* += r.bytes;
             return TValue{ .I8 = @intCast(r.result) };
         },
         4 => {
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             const r = varint.decodeZigzagVarint(data[(offset.*)..]);
             offset.* += r.bytes;
             return TValue{ .I16 = @intCast(r.result) };
         },
         5 => {
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             const r = varint.decodeZigzagVarint(data[(offset.*)..]);
             offset.* += r.bytes;
             return TValue{ .I32 = @intCast(r.result) };
         },
         6 => {
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             const r = varint.decodeZigzagVarint(data[(offset.*)..]);
             offset.* += r.bytes;
             return TValue{ .I64 = @intCast(r.result) };
         },
         7 => {
+            if (offset.* + 8 > data.len) return ThriftError.BufferUnderflow;
             const d: u64 = helpers.sliceToInt(data[(offset.*)..(offset.* + 8)]);
             offset.* += 8;
-            return TValue{ .DOUBLE = @floatFromInt(d) };
+            return TValue{ .DOUBLE = @bitCast(d) };
         },
         8 => {
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             const r = varint.decodeVarint(data[(offset.*)..]);
+            if (offset.* + r.bytes + r.result > data.len) return ThriftError.BufferUnderflow;
             offset.* += r.bytes;
             const bytes = data[(offset.*)..(offset.* + r.result)];
             offset.* += r.result;
-            return TValue{ .BINARY = bytes };
+
+            if (config.copy_binary_data) {
+                const owned_bytes = try allocator.dupe(u8, bytes);
+                return TValue{ .BINARY = owned_bytes };
+            } else {
+                return TValue{ .BINARY = bytes };
+            }
         },
         9, 10 => {
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             var list = std.ArrayList(TValue).init(allocator);
+            errdefer {
+                for (list.items) |item| {
+                    item.deinit();
+                }
+                list.deinit();
+            }
+
             const ds8 = helpers.splitU8(data[(offset.*)]);
             if (ds8.left == 0xF) {
                 offset.* += 1;
+                if (offset.* >= data.len) return ThriftError.BufferUnderflow;
                 const r = varint.decodeVarint(data[(offset.*)..]);
                 const size = r.result;
                 offset.* += r.bytes;
 
+                if (size > config.max_list_size) return ThriftError.ListTooLarge;
+
                 var s: usize = 0;
                 while (s < size) : (s += 1) {
-                    const c = try procceedNode(data, offset, ds8.right, allocator);
+                    const c = try procceedNodeWithConfig(data, offset, ds8.right, allocator, config, depth + 1);
                     try list.append(c);
                 }
             } else {
@@ -176,7 +243,7 @@ pub fn procceedNode(data: []u8, offset: *usize, field_type: u4, allocator: Alloc
 
                 var s: usize = 0;
                 while (s < size) : (s += 1) {
-                    const c = try procceedNode(data, offset, ds8.right, allocator);
+                    const c = try procceedNodeWithConfig(data, offset, ds8.right, allocator, config, depth + 1);
                     try list.append(c);
                 }
             }
@@ -185,8 +252,15 @@ pub fn procceedNode(data: []u8, offset: *usize, field_type: u4, allocator: Alloc
             return node;
         },
         11 => {
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             var keys = std.ArrayList(TValue).init(allocator);
             var values = std.ArrayList(TValue).init(allocator);
+            errdefer {
+                for (keys.items) |key| key.deinit();
+                for (values.items) |value| value.deinit();
+                keys.deinit();
+                values.deinit();
+            }
 
             if (data[offset.*] == 0) {
                 offset.* += 1;
@@ -198,14 +272,17 @@ pub fn procceedNode(data: []u8, offset: *usize, field_type: u4, allocator: Alloc
             const size = r.result;
             offset.* += r.bytes;
 
+            if (size > config.max_map_size) return ThriftError.MapTooLarge;
+
             // Read types
+            if (offset.* >= data.len) return ThriftError.BufferUnderflow;
             const ds8 = helpers.splitU8(data[(offset.*)]);
             offset.* += 1;
 
             var s: usize = 0;
             while (s < size) : (s += 1) {
-                const k = try procceedNode(data, offset, ds8.left, allocator);
-                const v = try procceedNode(data, offset, ds8.right, allocator);
+                const k = try procceedNodeWithConfig(data, offset, ds8.left, allocator, config, depth + 1);
+                const v = try procceedNodeWithConfig(data, offset, ds8.right, allocator, config, depth + 1);
                 try keys.append(k);
                 try values.append(v);
             }
@@ -214,35 +291,51 @@ pub fn procceedNode(data: []u8, offset: *usize, field_type: u4, allocator: Alloc
         12 => {
             var offsets = std.ArrayList(u32).init(allocator);
             var values = std.ArrayList(TValue).init(allocator);
+            errdefer {
+                for (values.items) |value| value.deinit();
+                offsets.deinit();
+                values.deinit();
+            }
 
             var field_id: u32 = 0;
-            while ((data[(offset.*)] != 0) and (data.len > offset.*)) { // STRUCT ENDS WITH 00000000 byte
+            var field_count: usize = 0;
+            while ((offset.* < data.len) and (data[(offset.*)] != 0)) {
+                field_count += 1;
+                if (field_count > config.max_struct_fields) return ThriftError.TooManyFields;
+
                 const ds8 = helpers.splitU8(data[(offset.*)]);
                 if (ds8.left == 0) {
+                    if (offset.* + 1 >= data.len) return ThriftError.BufferUnderflow;
                     field_id += data[(offset.*) + 1];
                     offset.* += 2;
-                    const c = try procceedNode(data, offset, ds8.right, allocator);
+                    const c = try procceedNodeWithConfig(data, offset, ds8.right, allocator, config, depth + 1);
                     try offsets.append(field_id);
                     try values.append(c);
                 } else {
                     field_id += ds8.left;
                     offset.* += 1;
-                    const c = try procceedNode(data, offset, ds8.right, allocator);
+                    const c = try procceedNodeWithConfig(data, offset, ds8.right, allocator, config, depth + 1);
                     try offsets.append(field_id);
                     try values.append(c);
                 }
             }
-            offset.* += 1; // Else we are stuck at the termination byte
+            if (offset.* < data.len) offset.* += 1; // Skip termination byte
             return TValue{ .STRUCT = .{ .offsets = offsets, .values = values } };
         },
         13 => {
+            if (offset.* + 16 > data.len) return ThriftError.BufferUnderflow;
             const uuid: []u8 = data[(offset.*)..(offset.* + 16)];
             offset.* += 16;
-            return TValue{ .UUID = uuid };
+
+            if (config.copy_binary_data) {
+                const owned_uuid = try allocator.dupe(u8, uuid);
+                return TValue{ .UUID = owned_uuid };
+            } else {
+                return TValue{ .UUID = uuid };
+            }
         },
         else => {
-            //std.debug.print("Please implement number {}\n", .{field_type});
-            return TValue{ .NULL = undefined };
+            return ThriftError.UnsupportedFieldType;
         },
     }
 }
