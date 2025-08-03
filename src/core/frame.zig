@@ -11,7 +11,7 @@ pub const Chunk: type = struct {
     columns: std.ArrayList(Series),
 
     pub fn deinit(self: Chunk) void {
-        for (self.columns) |c| {
+        for (self.columns.items) |c| {
             c.deinit();
         }
         self.columns.deinit();
@@ -19,7 +19,7 @@ pub const Chunk: type = struct {
 
     pub fn get_column_names(self: *Chunk, allocator: std.mem.Allocator) !std.ArrayList(LargeString) {
         var column_names = std.ArrayList(LargeString).initCapacity(allocator, self.columns.items.len);
-        for (self.columns) |column| {
+        for (self.columns.items) |column| {
             try column_names.append(column.name);
         }
         return column_names;
@@ -44,7 +44,7 @@ pub const Frame: type = struct {
     chunks: std.ArrayList(Chunk),
 
     pub fn deinit(self: Frame) void {
-        for (self.chunks) |c| {
+        for (self.chunks.items) |c| {
             c.deinit();
         }
         self.chunks.deinit();

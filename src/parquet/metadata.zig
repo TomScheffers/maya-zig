@@ -146,6 +146,10 @@ pub const SchemaElement: type = struct {
     precision: ?i32,
     field_id: ?i32,
     logical_type: ?LogicalType,
+
+    pub fn deinit(self: SchemaElement, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
 };
 
 fn parseSchema(data: thift.TValue, allocator: Allocator) !std.ArrayList(SchemaElement) {
@@ -177,7 +181,7 @@ fn parseSchema(data: thift.TValue, allocator: Allocator) !std.ArrayList(SchemaEl
                     schema_element.repetition_type = FieldRepetitionTypeFromInt(s.STRUCT.values.items[i].I32);
                 },
                 4 => {
-                    schema_element.name = s.STRUCT.values.items[i].BINARY;
+                    schema_element.name = try allocator.dupe(u8, s.STRUCT.values.items[i].BINARY);
                 },
                 5 => {
                     schema_element.num_children = s.STRUCT.values.items[i].I32;
@@ -294,6 +298,15 @@ pub const ColumnMetaData: type = struct {
     bloom_filter_offset: ?i64,
     bloom_filter_length: ?i32,
     size_statistics: ?void, // TODO IMPLEMENT
+
+    pub fn deinit(self: ColumnMetaData, allocator: Allocator) void {
+        self.encodings.deinit();
+        for (self.path_in_schema.items) |path| {
+            allocator.free(path);
+        }
+        self.path_in_schema.deinit();
+        self.encoding_stats.deinit();
+    }
 };
 
 fn parseColumnMetaData(data: thift.TValue, allocator: Allocator) !ColumnMetaData {
@@ -304,7 +317,8 @@ fn parseColumnMetaData(data: thift.TValue, allocator: Allocator) !ColumnMetaData
 
     var path_in_schema = std.ArrayList([]u8).init(allocator);
     for (getStructAtOffset(data, 3).?.LIST.items) |e| {
-        try path_in_schema.append(e.BINARY);
+        const owned_path = try allocator.dupe(u8, e.BINARY);
+        try path_in_schema.append(owned_path);
     }
 
     var encoding_stats = std.ArrayList(PageEncodingStats).init(allocator);
@@ -380,6 +394,15 @@ pub const RowGroup: type = struct {
     file_offset: i64,
     total_compressed_size: i64,
     ordinal: i16,
+
+    pub fn deinit(self: RowGroup, allocator: Allocator) void {
+        for (self.columns.items) |column_chunk| {
+            if (column_chunk.meta_data) |meta_data| {
+                meta_data.deinit(allocator);
+            }
+        }
+        self.columns.deinit();
+    }
 };
 
 fn parseRowGroups(data: thift.TValue, allocator: Allocator) !std.ArrayList(RowGroup) {
@@ -406,12 +429,25 @@ pub const MetaData: type = struct {
     row_groups: std.ArrayList(RowGroup),
     key_value_metadata: ?std.ArrayList(KeyValue),
     created_by: ?[]u8,
+    allocator: Allocator,
 
     pub fn deinit(self: MetaData) void {
+        for (self.schema.items) |schema_element| {
+            schema_element.deinit(self.allocator);
+        }
         self.schema.deinit();
+
+        for (self.row_groups.items) |row_group| {
+            row_group.deinit(self.allocator);
+        }
         self.row_groups.deinit();
+
         if (self.key_value_metadata) |kv| {
             kv.deinit();
+        }
+
+        if (self.created_by) |created_by| {
+            self.allocator.free(created_by);
         }
     }
 };
@@ -442,11 +478,12 @@ pub fn parseMetadata(data: []u8, allocator: Allocator) !MetaData {
         .created_by = blk: {
             const created_by = getStructAtOffset(node, 6);
             if (created_by) |c| {
-                break :blk c.BINARY;
+                break :blk try allocator.dupe(u8, c.BINARY);
             } else {
                 break :blk null;
             }
         },
+        .allocator = allocator,
     };
     return metadata;
 }

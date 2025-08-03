@@ -16,7 +16,7 @@ pub const SmallString: type = struct {
 };
 
 pub const LargeString: type = struct {
-    len: u32,
+    length: u32,
     prefix: [4]u8,
     trailing: ?[*]const u8,
 
@@ -26,43 +26,43 @@ pub const LargeString: type = struct {
         var prefix: [4]u8 = undefined;
         @memcpy(prefix[0..@min(str.len, 4)], str[0..@min(str.len, 4)]);
         if (str.len <= 4) {
-            return Self{ .len = @intCast(str.len), .prefix = prefix, .trailing = null };
+            return Self{ .length = @intCast(str.len), .prefix = prefix, .trailing = null };
         } else {
             const trailing = try allocator.alloc(u8, str.len - 4);
             @memcpy(trailing, str[4..]);
-            return Self{ .len = @intCast(str.len), .prefix = prefix, .trailing = trailing.ptr };
+            return Self{ .length = @intCast(str.len), .prefix = prefix, .trailing = trailing.ptr };
         }
     }
 
     pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
         if (self.trailing) |t| {
-            allocator.free(t[0 .. self.len - 4]);
+            allocator.free(t[0 .. self.length - 4]);
         }
     }
 
     pub fn len(self: Self) usize {
-        return @as(usize, self.len);
+        return @as(usize, self.length);
     }
 
     pub fn fmt(self: Self, comptime N: usize) [N]u8 {
         var buf: [N]u8 = undefined;
         if (self.trailing) |t| {
-            const mx = @min(self.len, N);
+            const mx = @min(self.length, N);
             @memcpy(buf[0..4], self.prefix[0..]);
             @memcpy(buf[4..mx], t[0 .. mx - 4]);
         } else {
             @memcpy(buf[0..4], self.prefix[0..]);
         }
-        for (self.len..N) |i| {
+        for (self.length..N) |i| {
             buf[i] = ' ';
         }
         return buf;
     }
 
     pub fn eql(self: Self, other: Self) bool {
-        if (self.len != other.len) return false;
+        if (self.length != other.length) return false;
         if (std.mem.eql(u8, &self.prefix, &other.prefix)) {
-            if (self.len <= 4) return true;
+            if (self.length <= 4) return true;
 
             if (self.trailing) |st| {
                 if (other.trailing) |ot| {
@@ -104,26 +104,26 @@ const String: type = struct {
     }
 
     pub fn deinit(self: String, allocator: std.mem.Allocator) void {
-        if (self.len > 12) {
-            allocator.free(self.trailing.?[0 .. self.len - 4]);
+        if (self.length > 12) {
+            allocator.free(self.trailing.?[0 .. self.length - 4]);
         }
     }
 
     pub fn fmt(self: String, comptime N: usize) [N]u8 {
         var buf: [N]u8 = undefined;
-        if (self.len <= 4) {
+        if (self.length <= 4) {
             @memcpy(buf[0..4], self.prefix[0..]);
-        } else if (self.len <= 12) {
-            const mx = @min(self.len, N);
+        } else if (self.length <= 12) {
+            const mx = @min(self.length, N);
             @memcpy(buf[0..4], self.prefix[0..]);
             const trail: *[8]u8 = @constCast(@ptrCast(self.trailing.?)); // Trailing is not actually a pointer
             @memcpy(buf[4..mx], trail[0 .. mx - 4]);
         } else {
-            const mx = @min(self.len, N);
+            const mx = @min(self.length, N);
             @memcpy(buf[0..4], self.prefix[0..]);
             @memcpy(buf[4..mx], self.trailing.?[0 .. mx - 4]);
         }
-        for (self.len..N) |i| {
+        for (self.length..N) |i| {
             buf[i] = ' ';
         }
         return buf;
