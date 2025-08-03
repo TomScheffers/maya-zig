@@ -25,11 +25,18 @@ pub fn plainDecodeBytes(buf: []u8, num_values: usize, allocator: std.mem.Allocat
     var result = try allocator.alloc(LargeString, num_values);
     var offset: usize = 0;
 
+    var sum: u64 = 0;
+    for (buf) |byte| {
+        sum += byte;
+    }
+    std.debug.print("Buf length: {d}, Num values: {d}, Sum: {d}\n", .{ buf.len, num_values, sum });
+
     for (0..num_values) |i| {
         // Find amount of bytes
         const vbuf = @as(*[4]u8, @ptrCast(buf[offset .. offset + 4].ptr)).*;
         const bytes = std.mem.readInt(u32, &vbuf, std.builtin.Endian.little);
         offset += 4;
+        // std.debug.print("Bytes: {d}\n", .{bytes});
 
         // Append bytes
         result[i] = try LargeString.init(buf[offset .. offset + bytes], allocator);
