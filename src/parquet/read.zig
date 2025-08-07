@@ -109,7 +109,11 @@ pub const ParquetReader = struct {
             std.debug.print("NEW APPROACH: Allocated {d} bytes, read {d} bytes, sum: {d}\n", .{ size, bytes_read, sum });
         }
 
-        return try page.readColumnChunk(column_data, column_chunk, metadata, self.allocator);
+        // Use a thread-safe allocator for page decoding since it spawns threads
+        var thread_safe_arena: std.heap.ThreadSafeAllocator = .{ .child_allocator = self.allocator };
+        const arena = thread_safe_arena.allocator();
+
+        return try page.readColumnChunk(column_data, column_chunk, metadata, arena);
     }
 
     // Read specific columns from a row group
@@ -196,122 +200,4 @@ pub fn readParquet(path: []const u8, allocator: std.mem.Allocator) !Frame {
 
     // Read all columns from all row groups (but still more efficient than loading entire file)
     return try reader.readAllRowGroupsSelective(null);
-}
-
-// OLD FUNCTIONS
-
-// Original functions restored for compatibility
-pub fn readColumnChunkWg(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator, result: *series.Series, wg: *std.Thread.WaitGroup) !void {
-    wg.start();
-    defer wg.finish();
-    const column = try page.readColumnChunk(buf, column_chunk, metadata, allocator);
-    result.* = column;
-}
-
-pub fn readRowGroup(buf: []u8, row_group: md.RowGroup, metadata: md.MetaData, allocator: std.mem.Allocator) !Chunk {
-    var wait_group: std.Thread.WaitGroup = .{};
-    var thread_handles = try allocator.alloc(std.Thread, row_group.columns.items.len);
-    const results = try allocator.alloc(series.Series, row_group.columns.items.len);
-
-    for (row_group.columns.items, 0..) |column_chunk, i| {
-        const s1: usize = @intCast(column_chunk.meta_data.?.data_page_offset);
-        const sz: usize = @intCast(column_chunk.meta_data.?.total_compressed_size);
-
-        // DEBUG: Compare with new approach
-        const column_name = column_chunk.meta_data.?.path_in_schema.items[0];
-
-        // Show first few bytes of the slice we're about to pass
-        if ((std.mem.eql(u8, column_name, "txt")) and (s1 + 16 <= buf.len)) {
-            std.debug.print("\nOLD APPROACH: Reading column '{s}': buf[{d}..{d}] (offset={d}, size={d})\n", .{ column_name, s1, s1 + sz, s1, sz });
-            var sum: u64 = 0;
-            for (buf[s1 .. s1 + sz]) |byte| {
-                sum += byte;
-            }
-            std.debug.print("OLD APPROACH: Sum of buffer bytes: {d}\n", .{sum});
-            std.debug.print("OLD APPROACH: First 16 bytes of buf[{d}..{d}]: ", .{ s1, s1 + 16 });
-            for (buf[s1 .. s1 + @min(16, sz)]) |byte| {
-                std.debug.print("{x:0>2} ", .{byte});
-            }
-        }
-
-        thread_handles[i] = try std.Thread.spawn(
-            .{},
-            readColumnChunkWg,
-            .{ buf[s1 .. s1 + sz], column_chunk, metadata, allocator, &results[i], &wait_group },
-        );
-    }
-    wait_group.wait();
-    for (thread_handles) |th| {
-        th.join();
-    }
-
-    var columns = std.ArrayList(series.Series).init(allocator);
-    for (results) |val| {
-        try columns.append(val);
-    }
-    return Chunk{ .columns = columns };
-}
-
-pub fn readRowGroupWg(buf: []u8, row_group: md.RowGroup, metadata: md.MetaData, allocator: std.mem.Allocator, result: *Chunk, wg: *std.Thread.WaitGroup) !void {
-    wg.start();
-    defer wg.finish();
-    const column = try readRowGroup(buf, row_group, metadata, allocator);
-    result.* = column;
-}
-
-pub fn readParquetData(buf: []u8, metadata: md.MetaData, allocator: std.mem.Allocator) !Frame {
-    // Make allocator thread safe
-    var thread_safe_arena: std.heap.ThreadSafeAllocator = .{
-        .child_allocator = allocator,
-    };
-    const arena = thread_safe_arena.allocator();
-
-    // Threading prep
-    var wait_group: std.Thread.WaitGroup = .{};
-    var thread_handles = try allocator.alloc(std.Thread, metadata.row_groups.items.len);
-    const results = try allocator.alloc(Chunk, metadata.row_groups.items.len);
-
-    // Read row groups into chunks into frame
-    for (metadata.row_groups.items, 0..) |row_group, i| {
-        thread_handles[i] = try std.Thread.spawn(
-            .{},
-            readRowGroupWg,
-            .{ buf, row_group, metadata, arena, &results[i], &wait_group },
-        );
-    }
-    wait_group.wait();
-    for (thread_handles) |th| {
-        th.join();
-    }
-
-    var chunks = std.ArrayList(Chunk).init(allocator);
-    for (results) |val| {
-        try chunks.append(val);
-    }
-    return Frame{ .chunks = chunks };
-}
-
-// Original readParquet function that loads entire file into memory
-pub fn readParquetOld(path: []const u8, allocator: std.mem.Allocator) !Frame {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    const file_buffer = try file.readToEndAlloc(allocator, 100_000_000);
-    const fl = file_buffer.len;
-    defer allocator.free(file_buffer);
-
-    // Check PAR1 tags
-    try expect(std.mem.eql(u8, file_buffer[0..4], &PAR1));
-    try expect(std.mem.eql(u8, file_buffer[(fl - 4)..], &PAR1));
-
-    // Read metadata
-    // https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift#L1163
-    // https://parquet.apache.org/docs/file-format/metadata/
-    const metadata_bytes: u64 = hlp.sliceToInt(file_buffer[(fl - 8)..(fl - 4)]);
-    const metadata = try md.parseMetadata(file_buffer[(fl - metadata_bytes - 8)..(fl - 8)], allocator);
-    defer metadata.deinit();
-
-    // Read data
-    const df = try readParquetData(file_buffer, metadata, allocator);
-    return df;
 }

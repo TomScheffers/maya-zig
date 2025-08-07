@@ -13,11 +13,8 @@ pub fn main() !void {
     // Demo 1: Standard parquet reading (optimized approach)
     std.debug.print("=== Optimized Parquet Reading ===\n", .{});
 
-    var frame = try parquet.readParquetOld(path, allocator);
+    var frame = try parquet.readParquet(path, allocator);
     defer frame.deinit();
-
-    var frame_new = try parquet.readParquet(path, allocator);
-    defer frame_new.deinit();
 
     // Print frame info
     std.debug.print("New ParquetReader succeeded! Frame loaded.\n", .{});
