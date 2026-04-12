@@ -5,56 +5,13 @@ const md = @import("metadata.zig");
 const page = @import("page.zig");
 
 const hlp = @import("../utils/helpers.zig");
+const ThreadSafeAllocator = @import("../utils/thread_safe_allocator.zig").ThreadSafeAllocator;
 const series = @import("../core/series.zig");
 const frame = @import("../core/frame.zig");
 const Chunk = frame.Chunk;
 const Frame = frame.Frame;
 
 const PAR1 = [4]u8{ 'P', 'A', 'R', '1' };
-
-const ThreadSafeAllocator = struct {
-    backing: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
-
-    pub fn allocator(self: *ThreadSafeAllocator) std.mem.Allocator {
-        return .{ .ptr = self, .vtable = &vtable };
-    }
-
-    const vtable: std.mem.Allocator.VTable = .{
-        .alloc = tsAlloc,
-        .resize = tsResize,
-        .free = tsFree,
-        .remap = tsRemap,
-    };
-
-    fn tsAlloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.backing.rawAlloc(len, ptr_align, ret_addr);
-    }
-
-    fn tsResize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
-        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.backing.rawResize(buf, buf_align, new_len, ret_addr);
-    }
-
-    fn tsRemap(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
-        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.backing.rawRemap(buf, buf_align, new_len, ret_addr);
-    }
-
-    fn tsFree(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
-        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        self.backing.rawFree(buf, buf_align, ret_addr);
-    }
-};
 
 const DecodeResult = struct {
     series: ?series.Series,

@@ -46,8 +46,7 @@ pub fn ArrayType(comptime T: type) type {
         }
 
         fn extend(self: *Self, other: *Self) !void {
-            const ot = try other.data.toOwnedSlice();
-            try self.*.data.appendSlice(ot);
+            try self.*.data.appendSlice(other.data.items);
             other.deinit();
         }
 
