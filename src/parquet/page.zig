@@ -9,9 +9,6 @@ const Bitmap = series.Bitmap;
 const Series = series.Series;
 const DataType = series.DataType;
 
-const time = std.time;
-const Instant = time.Instant;
-
 pub fn readEncodedData(buf: []u8, encoding: md.Encoding, binary_type: ?md.BinaryType, num_values: usize, allocator: std.mem.Allocator) !Array {
     // std.debug.print("\nENCODINGS {any}", .{encoding});
     switch (encoding) {
@@ -138,8 +135,6 @@ pub fn readDictionaryPage(buf: []u8, page_header: md.PageHeader, binary_type: md
 }
 
 pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator) !Series {
-    const start = try Instant.now();
-
     // Find binary type for column
     const schema_element: md.SchemaElement = brk: {
         for (metadata.schema.items) |s| {
@@ -199,19 +194,6 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
     var s: Series = data.items[0];
     for (1..data.items.len) |i| {
         try s.extend(&data.items[i]);
-    }
-
-    if (s.len() != column_chunk.meta_data.?.num_values) {
-        std.debug.print("\nISSUE: Mismatch in size of concatenated page (FILL WITH NULLS?): {}", .{s.len()});
-    }
-
-    const end = try Instant.now();
-    const elapsed1: f64 = @floatFromInt(end.since(start));
-
-    if (dictionary) |dict| {
-        std.debug.print("\nReading series {s} with {d} pages with dict len {d} took: {d:.3}ms\n", .{ s.name, data.items.len, dict.len(), elapsed1 / time.ns_per_s });
-    } else {
-        std.debug.print("\nReading series {s} with {d} pages took: {d:.3}ms\n", .{ s.name, data.items.len, elapsed1 / time.ns_per_s });
     }
 
     return s;

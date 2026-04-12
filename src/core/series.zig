@@ -184,17 +184,18 @@ pub const Series: type = struct {
         self.*.dictionary = dictionary;
     }
 
-    // Makes dictionary NULL and maps array of indices to values
     pub fn unmapDictionary(self: *Self) !void {
         if (self.dictionary) |dic| {
             switch (dic) {
                 inline else => |x| {
                     const T = @TypeOf(x).data_type;
-                    var arr = try std.array_list.Managed(T).initCapacity(self.allocator, self.len());
-                    for (self.data.UInt32.data.items) |idx| {
-                        try arr.append(x.data.items[idx]);
+                    const indices = self.data.UInt32.data.items;
+                    const dict_items = x.data.items;
+                    const result = try self.allocator.alloc(T, indices.len);
+                    for (indices, 0..) |idx, i| {
+                        result[i] = dict_items[idx];
                     }
-                    self.data = Array.fromArrayList(T, arr);
+                    self.data = Array.fromArrayList(T, std.array_list.Managed(T).fromOwnedSlice(self.allocator, result));
                     self.dictionary = null;
                 },
             }

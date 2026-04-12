@@ -66,11 +66,9 @@ pub fn rleHybridDecode(buf: []u8, num_bits: u5, num_values: usize, comptime T: t
 }
 
 pub fn rleBitmapDecode(buf: []u8, num_values: usize, allocator: std.mem.Allocator) !std.array_list.Managed(u64) {
-    // Read varint to determine if we are bitpacking or rle
     const vi = varint.decodeVarint(buf);
     const size = (num_values + 63) / 64;
     if (vi.result & 1 == 1) {
-        // bitpacking
         var decoded = try std.array_list.Managed(u64).initCapacity(allocator, size);
         var i: usize = vi.bytes;
         while (i < buf.len) : (i += 8) {
@@ -79,26 +77,36 @@ pub fn rleBitmapDecode(buf: []u8, num_values: usize, allocator: std.mem.Allocato
         }
         return decoded;
     } else {
-        // rle encoding
-        const rle = try rleDecode(buf, num_values, u8, allocator);
-        defer rle.deinit();
-
-        // Bitpacking into u64
         var decoded = try std.array_list.Managed(u64).initCapacity(allocator, size);
-
+        var pos: usize = 0;
+        var val_offset: usize = 0;
         var pack: u64 = 0;
-        var bit: u7 = 0;
-        for (rle.items, 0..) |boolean, i| {
-            if (boolean != 0) {
-                pack |= @as(u64, 1) << @intCast(bit);
-            }
+        var bit: u6 = 0;
 
-            bit += 1;
-            if (bit == 64 or i == rle.items.len - 1) {
-                try decoded.append(pack);
-                pack = 0;
-                bit = 0;
+        while (val_offset < num_values and pos < buf.len) {
+            const run_vi = varint.decodeVarint(buf[pos..]);
+            const run_length = run_vi.result >> 1;
+            pos += run_vi.bytes;
+
+            const vbuf = @as(*[1]u8, @ptrCast(buf[pos .. pos + 1].ptr)).*;
+            const boolean = std.mem.readInt(u8, &vbuf, std.builtin.Endian.little);
+            pos += 1;
+
+            for (0..run_length) |_| {
+                if (val_offset >= num_values) break;
+                if (boolean != 0) {
+                    pack |= @as(u64, 1) << bit;
+                }
+                bit +%= 1;
+                val_offset += 1;
+                if (bit == 0) {
+                    try decoded.append(pack);
+                    pack = 0;
+                }
             }
+        }
+        if (bit != 0 or val_offset == 0) {
+            try decoded.append(pack);
         }
         return decoded;
     }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const expect = std.testing.expect;
 const md = @import("metadata.zig");
 const page = @import("page.zig");
@@ -11,158 +12,246 @@ const Frame = frame.Frame;
 
 const PAR1 = [4]u8{ 'P', 'A', 'R', '1' };
 
-// Structure to hold file handle and metadata for efficient reading
+const ThreadSafeAllocator = struct {
+    backing: std.mem.Allocator,
+    mutex: std.Thread.Mutex = .{},
+
+    pub fn allocator(self: *ThreadSafeAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = tsAlloc,
+        .resize = tsResize,
+        .free = tsFree,
+        .remap = tsRemap,
+    };
+
+    fn tsAlloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.backing.rawAlloc(len, ptr_align, ret_addr);
+    }
+
+    fn tsResize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.backing.rawResize(buf, buf_align, new_len, ret_addr);
+    }
+
+    fn tsRemap(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.backing.rawRemap(buf, buf_align, new_len, ret_addr);
+    }
+
+    fn tsFree(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.backing.rawFree(buf, buf_align, ret_addr);
+    }
+};
+
+const DecodeResult = struct {
+    series: ?series.Series,
+    err: bool,
+};
+
+fn decodeColumnTask(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, alloc: std.mem.Allocator, result: *DecodeResult) void {
+    result.series = page.readColumnChunk(buf, column_chunk, metadata, alloc) catch {
+        result.err = true;
+        return;
+    };
+}
+
 pub const ParquetReader = struct {
-    file: std.fs.File,
+    file_data: []u8,
     metadata: md.MetaData,
     allocator: std.mem.Allocator,
+    ts_allocator: ThreadSafeAllocator,
 
     pub fn init(path: []const u8, allocator: std.mem.Allocator) !ParquetReader {
         var file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
 
-        // Get file size
         const file_size = try file.getEndPos();
+        const file_data = try allocator.alloc(u8, file_size);
+        errdefer allocator.free(file_data);
 
-        // Read footer to check PAR1 magic and get metadata size
-        try file.seekTo(file_size - 8);
-        var footer_buf: [8]u8 = undefined;
-        _ = try file.readAll(&footer_buf);
+        const bytes_read = try file.readAll(file_data);
+        if (bytes_read != file_size) return error.IncompleteRead;
 
-        // Check PAR1 magic at end
-        try expect(std.mem.eql(u8, footer_buf[4..8], &PAR1));
+        // Validate PAR1 magic at start and end
+        if (!std.mem.eql(u8, file_data[0..4], &PAR1)) return error.InvalidParquetMagic;
+        if (!std.mem.eql(u8, file_data[file_size - 4 ..], &PAR1)) return error.InvalidParquetMagic;
 
-        // Get metadata size
-        const metadata_bytes: u64 = hlp.sliceToInt(footer_buf[0..4]);
-
-        // Read metadata
+        const metadata_bytes: u64 = hlp.sliceToInt(file_data[file_size - 8 .. file_size - 4]);
         const metadata_start = file_size - metadata_bytes - 8;
-        try file.seekTo(metadata_start);
-        const metadata_buf = try allocator.alloc(u8, metadata_bytes);
-        defer allocator.free(metadata_buf);
-        _ = try file.readAll(metadata_buf);
-
-        const metadata = try md.parseMetadata(metadata_buf, allocator);
-
-        // Check PAR1 magic at beginning
-        try file.seekTo(0);
-        var header_buf: [4]u8 = undefined;
-        _ = try file.readAll(&header_buf);
-        try expect(std.mem.eql(u8, &header_buf, &PAR1));
+        const metadata = try md.parseMetadata(file_data[metadata_start .. file_size - 8], allocator);
 
         return ParquetReader{
-            .file = file,
+            .file_data = file_data,
             .metadata = metadata,
             .allocator = allocator,
+            .ts_allocator = .{ .backing = allocator },
         };
     }
 
     pub fn deinit(self: *ParquetReader) void {
         self.metadata.deinit();
-        self.file.close();
+        self.allocator.free(self.file_data);
     }
 
-    // Read specific column chunk by seeking to its position
-    fn readColumnChunkFromFile(self: *ParquetReader, column_chunk: md.ColumnChunk, metadata: md.MetaData) !series.Series {
-        // When a dictionary page exists it lives before the data pages, so the column
-        // chunk starts at dictionary_page_offset. total_compressed_size covers all pages
-        // (dictionary + data), so we must start from the earliest offset.
-        const offset: u64 = if (column_chunk.meta_data.?.dictionary_page_offset) |dict_off|
+    fn columnChunkSlice(self: *ParquetReader, column_chunk: md.ColumnChunk) ![]u8 {
+        const offset: usize = if (column_chunk.meta_data.?.dictionary_page_offset) |dict_off|
             @intCast(dict_off)
         else
             @intCast(column_chunk.meta_data.?.data_page_offset);
-        const size: u64 = @intCast(column_chunk.meta_data.?.total_compressed_size);
+        const size: usize = @intCast(column_chunk.meta_data.?.total_compressed_size);
 
-        // Debug: Print column info
-        const column_name = column_chunk.meta_data.?.path_in_schema.items[0];
-
-        // Get file size to validate offset
-        const file_size = try self.file.getEndPos();
-        if (offset + size > file_size) {
-            std.debug.print("ERROR: Column data extends beyond file. File size: {d}, requested: {d}-{d}\n", .{ file_size, offset, offset + size });
-            return error.InvalidOffset;
-        }
-
-        // Let's check what's at this file position - read first few bytes for comparison
-        if (std.mem.eql(u8, column_name, "txt")) {
-            std.debug.print("NEW APPROACH: Reading column '{s}': buf[{d}..{d}] (offset={d}, size={d})\n", .{ column_name, offset, offset + size, offset, size });
-            try self.file.seekTo(offset);
-            var debug_header: [16]u8 = undefined;
-            const debug_bytes_read = try self.file.read(&debug_header);
-            std.debug.print("First {d} bytes at offset {d}: ", .{ debug_bytes_read, offset });
-            for (debug_header[0..debug_bytes_read]) |byte| {
-                std.debug.print("{x:0>2} ", .{byte});
-            }
-        }
-
-        // Seek back and read the full column data
-        try self.file.seekTo(offset);
-        const column_data = try self.allocator.alloc(u8, size);
-        defer self.allocator.free(column_data);
-
-        const bytes_read = try self.file.readAll(column_data);
-        if (bytes_read != size) {
-            std.debug.print("ERROR: Expected {d} bytes, but read {d} bytes at offset {d}\n", .{ size, bytes_read, offset });
-            return error.IncompleteRead;
-        }
-
-        // Calculate sum AFTER reading the data
-        var sum: u64 = 0;
-        for (column_data) |byte| {
-            sum += byte;
-        }
-
-        if (std.mem.eql(u8, column_name, "txt")) {
-            std.debug.print("NEW APPROACH: Allocated {d} bytes, read {d} bytes, sum: {d}\n", .{ size, bytes_read, sum });
-        }
-
-        return try page.readColumnChunk(column_data, column_chunk, metadata, self.allocator);
+        if (offset + size > self.file_data.len) return error.InvalidOffset;
+        return self.file_data[offset .. offset + size];
     }
 
-    // Read specific columns from a row group
-    pub fn readRowGroupSelective(self: *ParquetReader, row_group_idx: usize, column_names: ?[]const []const u8) !Chunk {
-        if (row_group_idx >= self.metadata.row_groups.items.len) {
-            return error.RowGroupIndexOutOfBounds;
-        }
-
-        const row_group = self.metadata.row_groups.items[row_group_idx];
-        var selected_columns = std.array_list.Managed(series.Series).init(self.allocator);
-
-        // If no column names specified, read all columns
+    fn collectColumnChunks(self: *ParquetReader, row_group: md.RowGroup, column_names: ?[]const []const u8) !struct { chunks: []md.ColumnChunk, bufs: [][]u8 } {
+        var list = std.array_list.Managed(md.ColumnChunk).init(self.allocator);
         if (column_names == null) {
-            for (row_group.columns.items) |column_chunk| {
-                const column = try self.readColumnChunkFromFile(column_chunk, self.metadata);
-                try selected_columns.append(column);
-            }
+            try list.appendSlice(row_group.columns.items);
         } else {
-            // Read only specified columns
             for (column_names.?) |col_name| {
-                for (row_group.columns.items) |column_chunk| {
-                    const schema_name = column_chunk.meta_data.?.path_in_schema.items[0];
-                    if (std.mem.eql(u8, schema_name, col_name)) {
-                        const column = try self.readColumnChunkFromFile(column_chunk, self.metadata);
-                        try selected_columns.append(column);
+                for (row_group.columns.items) |cc| {
+                    if (std.mem.eql(u8, cc.meta_data.?.path_in_schema.items[0], col_name)) {
+                        try list.append(cc);
                         break;
                     }
                 }
             }
         }
-
-        return Chunk{ .columns = selected_columns };
+        const chunks = try list.toOwnedSlice();
+        const bufs = try self.allocator.alloc([]u8, chunks.len);
+        for (chunks, 0..) |cc, i| {
+            bufs[i] = try self.columnChunkSlice(cc);
+        }
+        return .{ .chunks = chunks, .bufs = bufs };
     }
 
-    // Read specific columns from all row groups
     pub fn readAllRowGroupsSelective(self: *ParquetReader, column_names: ?[]const []const u8) !Frame {
-        var chunks = std.array_list.Managed(Chunk).init(self.allocator);
+        const num_rg = self.metadata.row_groups.items.len;
 
-        for (0..self.metadata.row_groups.items.len) |i| {
-            const chunk = try self.readRowGroupSelective(i, column_names);
-            try chunks.append(chunk);
+        // Collect all column chunks across all row groups into a flat batch
+        const rg_infos = try self.allocator.alloc(struct { chunks: []md.ColumnChunk, bufs: [][]u8, start: usize, count: usize }, num_rg);
+        defer self.allocator.free(rg_infos);
+
+        var total_columns: usize = 0;
+        for (self.metadata.row_groups.items, 0..) |rg, i| {
+            const info = try self.collectColumnChunks(rg, column_names);
+            rg_infos[i] = .{ .chunks = info.chunks, .bufs = info.bufs, .start = total_columns, .count = info.chunks.len };
+            total_columns += info.chunks.len;
+        }
+        defer for (rg_infos) |info| {
+            self.allocator.free(info.chunks);
+            self.allocator.free(info.bufs);
+        };
+
+        // Flat arrays for all tasks
+        const all_bufs = try self.allocator.alloc([]u8, total_columns);
+        defer self.allocator.free(all_bufs);
+        const all_chunks = try self.allocator.alloc(md.ColumnChunk, total_columns);
+        defer self.allocator.free(all_chunks);
+        const results = try self.allocator.alloc(DecodeResult, total_columns);
+        defer self.allocator.free(results);
+        @memset(results, .{ .series = null, .err = false });
+
+        for (rg_infos) |info| {
+            @memcpy(all_bufs[info.start .. info.start + info.count], info.bufs);
+            @memcpy(all_chunks[info.start .. info.start + info.count], info.chunks);
         }
 
-        return Frame{ .chunks = chunks };
+        // Decode all columns from all row groups in a single parallel batch
+        if (builtin.single_threaded or total_columns <= 1) {
+            for (0..total_columns) |i| {
+                decodeColumnTask(all_bufs[i], all_chunks[i], self.metadata, self.ts_allocator.allocator(), &results[i]);
+            }
+        } else {
+            var pool: std.Thread.Pool = undefined;
+            try pool.init(.{ .allocator = std.heap.page_allocator });
+            defer pool.deinit();
+
+            var wg: std.Thread.WaitGroup = .{};
+            for (0..total_columns) |i| {
+                pool.spawnWg(&wg, decodeColumnTask, .{
+                    all_bufs[i],
+                    all_chunks[i],
+                    self.metadata,
+                    self.ts_allocator.allocator(),
+                    &results[i],
+                });
+            }
+            pool.waitAndWork(&wg);
+        }
+
+        // Partition results back into per-row-group Chunks
+        var frame_chunks = try std.array_list.Managed(Chunk).initCapacity(self.allocator, num_rg);
+        for (rg_infos) |info| {
+            var cols = try std.array_list.Managed(series.Series).initCapacity(self.allocator, info.count);
+            for (results[info.start .. info.start + info.count]) |r| {
+                if (r.err) return error.ColumnDecodeFailed;
+                try cols.append(r.series.?);
+            }
+            try frame_chunks.append(Chunk{ .columns = cols });
+        }
+
+        return Frame{ .chunks = frame_chunks };
     }
 
-    // Get list of available column names
+    pub fn readRowGroupSelective(self: *ParquetReader, row_group_idx: usize, column_names: ?[]const []const u8) !Chunk {
+        if (row_group_idx >= self.metadata.row_groups.items.len) {
+            return error.RowGroupIndexOutOfBounds;
+        }
+        const rg = self.metadata.row_groups.items[row_group_idx];
+        const info = try self.collectColumnChunks(rg, column_names);
+        defer self.allocator.free(info.chunks);
+        defer self.allocator.free(info.bufs);
+
+        const n = info.chunks.len;
+        const results = try self.allocator.alloc(DecodeResult, n);
+        defer self.allocator.free(results);
+        @memset(results, .{ .series = null, .err = false });
+
+        if (builtin.single_threaded or n <= 1) {
+            for (0..n) |i| {
+                decodeColumnTask(info.bufs[i], info.chunks[i], self.metadata, self.ts_allocator.allocator(), &results[i]);
+            }
+        } else {
+            var pool: std.Thread.Pool = undefined;
+            try pool.init(.{ .allocator = std.heap.page_allocator });
+            defer pool.deinit();
+
+            var wg: std.Thread.WaitGroup = .{};
+            for (0..n) |i| {
+                pool.spawnWg(&wg, decodeColumnTask, .{
+                    info.bufs[i],
+                    info.chunks[i],
+                    self.metadata,
+                    self.ts_allocator.allocator(),
+                    &results[i],
+                });
+            }
+            pool.waitAndWork(&wg);
+        }
+
+        var cols = try std.array_list.Managed(series.Series).initCapacity(self.allocator, n);
+        for (results) |r| {
+            if (r.err) return error.ColumnDecodeFailed;
+            try cols.append(r.series.?);
+        }
+        return Chunk{ .columns = cols };
+    }
+
     pub fn getColumnNames(self: *ParquetReader) !std.array_list.Managed([]u8) {
         var names = std.array_list.Managed([]u8).init(self.allocator);
 
@@ -200,6 +289,5 @@ pub fn readParquet(path: []const u8, allocator: std.mem.Allocator) !Frame {
     var reader = try ParquetReader.init(path, allocator);
     defer reader.deinit();
 
-    // Read all columns from all row groups (but still more efficient than loading entire file)
     return try reader.readAllRowGroupsSelective(null);
 }
