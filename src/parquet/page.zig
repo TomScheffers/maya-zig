@@ -137,27 +137,6 @@ pub fn readDictionaryPage(buf: []u8, page_header: md.PageHeader, binary_type: md
     return try readEncodedData(ucb, page_header.dictionary_page_header.?.encoding, binary_type, num_value, allocator);
 }
 
-const Page: type = union(md.PageType) { DATA_PAGE: Series, INDEX_PAGE: void, DICTIONARY_PAGE: Array, DATA_PAGE_V2: Series };
-
-pub fn readPage(buf: []u8, column_chunk: md.ColumnChunk, page_header: md.PageHeader, schema_element: md.SchemaElement, allocator: std.mem.Allocator, result: *Page, wg: *std.Thread.WaitGroup) !void {
-    wg.start();
-    defer wg.finish();
-    switch (page_header.page_type) {
-        md.PageType.DATA_PAGE => {
-            result.* = Page{ .DATA_PAGE = try readDataPage(buf, column_chunk, page_header, schema_element, allocator) };
-        },
-        md.PageType.DATA_PAGE_V2 => {
-            result.* = Page{ .DATA_PAGE_V2 = try readDataPageV2(buf, column_chunk, page_header, schema_element, allocator) };
-        },
-        md.PageType.INDEX_PAGE => {
-            result.* = Page{ .INDEX_PAGE = undefined };
-        },
-        md.PageType.DICTIONARY_PAGE => {
-            result.* = Page{ .DICTIONARY_PAGE = try readDictionaryPage(buf, page_header, schema_element.binary_type.?, allocator) };
-        },
-    }
-}
-
 pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.MetaData, allocator: std.mem.Allocator) !Series {
     const start = try Instant.now();
 
@@ -171,56 +150,52 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
         return error.ColumnNotFound;
     };
 
-    // Extract page contents
-    var wait_group: std.Thread.WaitGroup = .{};
-    var thread_handles = std.array_list.Managed(std.Thread).init(allocator);
-    var pages = std.array_list.Managed(Page).init(allocator);
+    // Decode pages sequentially
+    var dictionary: ?Array = null;
+    var data = std.array_list.Managed(Series).init(allocator);
 
     var page_offset: usize = 0;
     while (page_offset < buf.len) {
         const ph_output = try md.parsePageHeader(buf[page_offset..], allocator);
-        const psz = @as(usize, @intCast(ph_output.page_header.compressed_page_size));
+        const psz: usize = @intCast(ph_output.page_header.compressed_page_size);
         page_offset += ph_output.header_size;
-        try pages.append(undefined);
-        try thread_handles.append(try std.Thread.spawn(
-            .{},
-            readPage,
-            .{ buf[page_offset .. page_offset + psz], column_chunk, ph_output.page_header, schema_element, allocator, &pages.items[pages.items.len - 1], &wait_group },
-        ));
+        const page_buf = buf[page_offset .. page_offset + psz];
         page_offset += psz;
-    }
 
-    wait_group.wait();
-    for (thread_handles.items) |th| {
-        th.join();
-    }
-
-    // Unpack pages
-    var dictionary: ?Array = null;
-    var data = std.array_list.Managed(Series).init(allocator);
-    for (pages.items) |page| {
-        switch (page) {
-            md.PageType.DATA_PAGE => {
-                if (page.DATA_PAGE.len() > 0) {
-                    try data.append(page.DATA_PAGE);
-                }
+        switch (ph_output.page_header.page_type) {
+            .DATA_PAGE => {
+                const s = try readDataPage(page_buf, column_chunk, ph_output.page_header, schema_element, allocator);
+                if (s.len() > 0) try data.append(s);
             },
-            md.PageType.DATA_PAGE_V2 => {
-                if (page.DATA_PAGE_V2.len() > 0) {
-                    try data.append(page.DATA_PAGE_V2);
-                }
+            .DATA_PAGE_V2 => {
+                const s = try readDataPageV2(page_buf, column_chunk, ph_output.page_header, schema_element, allocator);
+                if (s.len() > 0) try data.append(s);
             },
-            md.PageType.DICTIONARY_PAGE => {
-                dictionary = page.DICTIONARY_PAGE;
+            .DICTIONARY_PAGE => {
+                dictionary = try readDictionaryPage(page_buf, ph_output.page_header, schema_element.binary_type.?, allocator);
             },
-            md.PageType.INDEX_PAGE => unreachable,
+            .INDEX_PAGE => {},
         }
     }
-    // for (data.items) |d| {
-    //     std.debug.print("\nFound page data: {s} with len {d} Series type {any} Binary type {any}", .{ column_chunk.meta_data.?.path_in_schema.items[0], d.len(), d.data_type, schema_element.binary_type.? });
-    // }
+
+    // When a dictionary is present, some pages use RLE_DICTIONARY (producing UInt32
+    // index arrays) while others may fall back to PLAIN (producing the native type).
+    // Resolve dictionary indices per-page so all pages share the same native type
+    // before concatenation.
+    if (dictionary) |dict| {
+        for (data.items) |*d| {
+            // Only unmap pages that actually contain dictionary indices (UInt32)
+            // AND where the dictionary has entries to look up.
+            // PLAIN-encoded fallback pages already carry the native type.
+            if (@as(DataType, d.data) == .UInt32 and dict.len() > 0) {
+                d.withDictionary(dict);
+                try d.unmapDictionary();
+            }
+        }
+    }
 
     // Concatenate pages
+    if (data.items.len == 0) return error.NoDataPages;
     var s: Series = data.items[0];
     for (1..data.items.len) |i| {
         try s.extend(&data.items[i]);
@@ -230,26 +205,13 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
         std.debug.print("\nISSUE: Mismatch in size of concatenated page (FILL WITH NULLS?): {}", .{s.len()});
     }
 
-    // Set dictionary if available
-    if (dictionary) |dict| {
-        s.withDictionary(dict);
-    }
-
-    // Map dictionary to values when binary type is smaller then 4 bytes (u32 is used for idxs)
-    switch (s.data_type) {
-        .Boolean, .Int8, .Int16, .Int32, .Int64, .UInt8, .UInt16, .UInt32, .UInt64 => {
-            try s.unmapDictionary();
-        },
-        else => {},
-    }
-
     const end = try Instant.now();
     const elapsed1: f64 = @floatFromInt(end.since(start));
 
     if (dictionary) |dict| {
-        std.debug.print("\nReading series {s} with {d} pages with dict len {d} took: {d:.3}ms\n", .{ s.name, pages.items.len, dict.len(), elapsed1 / time.ns_per_s });
+        std.debug.print("\nReading series {s} with {d} pages with dict len {d} took: {d:.3}ms\n", .{ s.name, data.items.len, dict.len(), elapsed1 / time.ns_per_s });
     } else {
-        std.debug.print("\nReading series {s} with {d} pages took: {d:.3}ms\n", .{ s.name, pages.items.len, elapsed1 / time.ns_per_s });
+        std.debug.print("\nReading series {s} with {d} pages took: {d:.3}ms\n", .{ s.name, data.items.len, elapsed1 / time.ns_per_s });
     }
 
     return s;

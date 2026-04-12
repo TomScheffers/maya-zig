@@ -115,11 +115,7 @@ pub const ParquetReader = struct {
             std.debug.print("NEW APPROACH: Allocated {d} bytes, read {d} bytes, sum: {d}\n", .{ size, bytes_read, sum });
         }
 
-        // Use a thread-safe allocator for page decoding since it spawns threads
-        var thread_safe_arena: std.heap.ThreadSafeAllocator = .{ .child_allocator = self.allocator };
-        const arena = thread_safe_arena.allocator();
-
-        return try page.readColumnChunk(column_data, column_chunk, metadata, arena);
+        return try page.readColumnChunk(column_data, column_chunk, metadata, self.allocator);
     }
 
     // Read specific columns from a row group
