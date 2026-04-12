@@ -9,15 +9,11 @@ pub fn rleDecode(buf: []u8, num_values: usize, comptime T: type, allocator: std.
     var data = try std.array_list.Managed(T).initCapacity(allocator, num_values);
     var i: usize = 0;
     var j: usize = 0;
-    std.debug.print("\nBuffer len {} Num values {}", .{ buf.len, num_values });
     while (j < num_values) {
-        // Run length
         const vi = varint.decodeVarint(buf[i..]);
         const rl: usize = vi.result >> 1;
         i += vi.bytes;
-        std.debug.print("\nRL {} {}", .{ rl, vi.bytes });
 
-        // Calculate repeated value
         const vbuf = @as(*[size]u8, @ptrCast(buf[(i)..(i + size)].ptr)).*;
         const v = std.mem.readInt(T, &vbuf, std.builtin.Endian.little);
         try data.appendNTimes(v, rl);
@@ -28,20 +24,45 @@ pub fn rleDecode(buf: []u8, num_values: usize, comptime T: type, allocator: std.
 }
 
 pub fn rleHybridDecode(buf: []u8, num_bits: u5, num_values: usize, comptime T: type, allocator: std.mem.Allocator) !std.array_list.Managed(T) {
-    // Read varint to determine if we are bitpacking or rle
-    const vi = varint.decodeVarint(buf);
     if (num_bits == 0) {
         var decoded = try std.array_list.Managed(T).initCapacity(allocator, num_values);
         try decoded.appendNTimes(0, num_values);
         return decoded;
-    } else if (vi.result & 1 == 1) {
-        // bitpacking
-        const decoded = try bitpack.bitpackDecode(buf[(vi.bytes)..], num_bits, num_values, T, allocator);
-        return decoded;
-    } else {
-        // rle encoding
-        return rleDecode(buf, num_values, T, allocator);
     }
+
+    var decoded = try std.array_list.Managed(T).initCapacity(allocator, num_values);
+    errdefer decoded.deinit();
+
+    var pos: usize = 0;
+    while (decoded.items.len < num_values and pos < buf.len) {
+        const vi = varint.decodeVarint(buf[pos..]);
+        pos += vi.bytes;
+
+        if (vi.result & 1 == 1) {
+            // Bit-packed run: (vi.result >> 1) groups of 8 values each.
+            // Each group occupies exactly num_bits bytes (8 values × num_bits bits / 8).
+            const num_groups = vi.result >> 1;
+            const run_values = num_groups * 8;
+            const run_bytes = num_groups * num_bits;
+            const take = @min(run_values, num_values - decoded.items.len);
+            const old_len = decoded.items.len;
+            try decoded.resize(old_len + take);
+            try bitpack.bitpackDecodeInto(buf[pos .. pos + run_bytes], num_bits, take, T, decoded.items[old_len..]);
+            pos += run_bytes;
+        } else {
+            // RLE run: (vi.result >> 1) repeated copies of a ceil(num_bits/8)-byte value.
+            const run_length = vi.result >> 1;
+            const val_bytes = (@as(usize, num_bits) + 7) / 8;
+            var v_buf: [@sizeOf(T)]u8 = [_]u8{0} ** @sizeOf(T);
+            @memcpy(v_buf[0..val_bytes], buf[pos .. pos + val_bytes]);
+            pos += val_bytes;
+            const v = std.mem.readInt(T, &v_buf, .little);
+            const take = @min(run_length, num_values - decoded.items.len);
+            try decoded.appendNTimes(v, take);
+        }
+    }
+
+    return decoded;
 }
 
 pub fn rleBitmapDecode(buf: []u8, num_values: usize, allocator: std.mem.Allocator) !std.array_list.Managed(u64) {

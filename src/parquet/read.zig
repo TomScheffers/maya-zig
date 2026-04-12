@@ -63,7 +63,13 @@ pub const ParquetReader = struct {
 
     // Read specific column chunk by seeking to its position
     fn readColumnChunkFromFile(self: *ParquetReader, column_chunk: md.ColumnChunk, metadata: md.MetaData) !series.Series {
-        const offset: u64 = @intCast(column_chunk.meta_data.?.data_page_offset);
+        // When a dictionary page exists it lives before the data pages, so the column
+        // chunk starts at dictionary_page_offset. total_compressed_size covers all pages
+        // (dictionary + data), so we must start from the earliest offset.
+        const offset: u64 = if (column_chunk.meta_data.?.dictionary_page_offset) |dict_off|
+            @intCast(dict_off)
+        else
+            @intCast(column_chunk.meta_data.?.data_page_offset);
         const size: u64 = @intCast(column_chunk.meta_data.?.total_compressed_size);
 
         // Debug: Print column info

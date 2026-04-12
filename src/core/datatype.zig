@@ -107,10 +107,23 @@ pub const DataType: type = enum {
         };
     }
 
+    fn fromBinaryType(bt: md.BinaryType) DataType {
+        return switch (bt) {
+            .BOOLEAN => DataType.Boolean,
+            .INT32 => DataType.Int32,
+            .INT64 => DataType.Int64,
+            .INT96 => DataType.Int64,
+            .FLOAT => DataType.Float32,
+            .DOUBLE => DataType.Float64,
+            .BYTE_ARRAY => DataType.Binary,
+            .FIXED_LEN_BYTE_ARRAY => DataType.Binary,
+        };
+    }
+
     pub fn fromSchemaElement(schema: md.SchemaElement) DataType {
         if (schema.converted_type) |ct| {
             return switch (ct) {
-                .UTF8 => DataType.Binary,
+                .UTF8, .ENUM, .JSON, .BSON => DataType.Binary,
                 .UINT_8 => DataType.UInt8,
                 .UINT_16 => DataType.UInt16,
                 .UINT_32 => DataType.UInt32,
@@ -120,31 +133,14 @@ pub const DataType: type = enum {
                 .INT_32 => DataType.Int32,
                 .INT_64 => DataType.Int64,
                 .DATE => DataType.Date,
-                // MAP,
-                // MAP_KEY_VALUE,
-                // LIST,
-                // ENUM,
-                // DECIMAL,
-                // TIME_MILLIS,
-                // TIME_MICROS,
-                // TIMESTAMP_MILLIS,
-                // TIMESTAMP_MICROS,
-                // .JSON,
-                // .BSON,
-                // .INTERVAL,
-                else => unreachable,
+                // Timestamps and times are stored as INT64 in the physical layer.
+                .TIMESTAMP_MILLIS, .TIMESTAMP_MICROS, .TIME_MILLIS, .TIME_MICROS => DataType.Int64,
+                // All other converted types (DECIMAL, MAP, LIST, INTERVAL, …): fall back
+                // to the physical binary type so we never hit unreachable on new files.
+                else => fromBinaryType(schema.binary_type.?),
             };
         } else {
-            return switch (schema.binary_type.?) {
-                .BOOLEAN => DataType.Boolean,
-                .INT32 => DataType.Int32,
-                .INT64 => DataType.Int64,
-                .INT96 => unreachable,
-                .FLOAT => DataType.Float32,
-                .DOUBLE => DataType.Float64,
-                .BYTE_ARRAY => DataType.Binary,
-                .FIXED_LEN_BYTE_ARRAY => DataType.Binary,
-            };
+            return fromBinaryType(schema.binary_type.?);
         }
     }
 
