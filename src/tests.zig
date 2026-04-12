@@ -76,12 +76,77 @@ test "bitpacking" {
 
     const allocator = std.testing.allocator;
 
-    const decoded = try enc.bitpack.bitpackDecodeSIMD(&data, num_bits, length, u64, allocator);
+    const decoded = try enc.bitpack.bitpackDecode(&data, num_bits, length, u64, allocator);
     defer decoded.deinit();
 
     std.debug.print("Decoded {any}", .{decoded.items});
 
     try std.testing.expect(std.mem.eql(u64, decoded.items, &exp));
+}
+
+fn fillBufWithPattern(buf: []u8, pattern: []const u8) void {
+    var off: usize = 0;
+    while (off < buf.len) {
+        const n = @min(pattern.len, buf.len - off);
+        @memcpy(buf[off..][0..n], pattern[0..n]);
+        off += n;
+    }
+}
+
+// Microbenchmark for bitpack.zig — run: zig test src/tests.zig -O ReleaseFast --test-filter "bitpack perf"
+test "bitpack perf" {
+    const allocator = std.heap.page_allocator;
+    const pattern = [_]u8{ 0b10001000, 0b11000110, 0b11111010 };
+
+    // Scalar path (same pattern family as "bitpacking", u32)
+    {
+        const num_bits: usize = 3;
+        const num_values: usize = 1_000_000;
+        const buf_len = num_values * num_bits / 8;
+        const buf = try allocator.alloc(u8, buf_len);
+        defer allocator.free(buf);
+        fillBufWithPattern(buf, &pattern);
+        for (0..2) |_| {
+            const d = try enc.bitpack.bitpackDecode(buf, num_bits, num_values, u32, allocator);
+            d.deinit();
+        }
+        const iters: usize = 15;
+        var timer = try std.time.Timer.start();
+        for (0..iters) |_| {
+            const d = try enc.bitpack.bitpackDecode(buf, num_bits, num_values, u32, allocator);
+            d.deinit();
+        }
+        const elapsed = timer.read();
+        std.debug.print(
+            "\n[scalar u32] num_bits=3 {d} iters x 1M vals: {d:.3} ms total\n",
+            .{ iters, @as(f64, @floatFromInt(elapsed)) / time.ns_per_ms },
+        );
+    }
+
+    // u64 + non-multiple-of-chunk length (exercises residual path)
+    {
+        const num_bits: usize = 3;
+        const num_values: usize = 1_000_003;
+        const buf_len = (num_values * num_bits + 7) / 8;
+        const buf = try allocator.alloc(u8, buf_len);
+        defer allocator.free(buf);
+        fillBufWithPattern(buf, &pattern);
+        for (0..2) |_| {
+            const d = try enc.bitpack.bitpackDecode(buf, num_bits, num_values, u64, allocator);
+            d.deinit();
+        }
+        const iters: usize = 20;
+        var timer = try std.time.Timer.start();
+        for (0..iters) |_| {
+            const d = try enc.bitpack.bitpackDecode(buf, num_bits, num_values, u64, allocator);
+            d.deinit();
+        }
+        const elapsed = timer.read();
+        std.debug.print(
+            "\n[u64 residual] num_bits=3 {d} iters x 1M003 vals: {d:.3} ms total\n",
+            .{ iters, @as(f64, @floatFromInt(elapsed)) / time.ns_per_ms },
+        );
+    }
 }
 
 test "read" {
