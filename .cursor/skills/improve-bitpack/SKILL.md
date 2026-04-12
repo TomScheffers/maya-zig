@@ -1,6 +1,6 @@
 ---
 name: improve-bitpack
-description: Optimizes Parquet-style bit-packed decoders using baselines, ReleaseFast benchmarks, hypothesis-driven changes, and append-only updates to docs/bitpack_optimization.md. Use when improving bitpack in maya-zig, tuning parquet encodings, or when the user mentions bitpack, bitpackDecode, decodePack, or bitpack performance docs.
+description: Optimizes Parquet-style bit-packed decoders using baselines, ReleaseFast benchmarks, hypothesis-driven changes, and updates to docs/bitpack_optimization.md. Use when improving bitpack in maya-zig, tuning parquet encodings, or when the user mentions bitpack, bitpackDecode, decodePack, or bitpack performance docs.
 ---
 
 # Improve bitpack (maya-zig)
@@ -8,27 +8,42 @@ description: Optimizes Parquet-style bit-packed decoders using baselines, Releas
 ## Scope
 
 - **Code:** `src/parquet/encodings/bitpack.zig`, callers (e.g. `src/parquet/encodings/rle.zig`), tests in `src/tests.zig` (`bitpacking`, `bitpack perf`, `bitpackTime`, `bitpack decodeInto`).
-- **Doc:** `docs/bitpack_optimization.md` — experiment log + performance tables.
+- **Doc:** `docs/bitpack_optimization.md` — experiment log + performance table across all `num_bits`.
 
 Assume **Zig 0.15.x** and **`std.array_list.Managed`** where the codebase uses it.
 
+## Current architecture
+
+The decoder has two paths selected by `decodePack`:
+
+1. **`decodePackByteAligned`** — when `num_bits % 8 == 0`. Reads whole bytes per value via `std.mem.readInt`.
+2. **`decodePackBitStream`** — non-aligned widths. Uses a **`u128` accumulator** with **bulk `u64` refill** (loads 8 bytes at once via `readInt(u64, …)` when `avail < num_bits`). Byte-at-a-time tail for the final < 8 bytes. This is the key optimization — it reduces refill iterations ~8× vs loading one byte at a time.
+
+Public API: `bitpackDecode` (allocating) and `bitpackDecodeInto` (caller-owned buffer).
+
 ## Workflow (each change)
 
-1. **Baseline:** Run tests with **`-O ReleaseFast`** before edits:
-   - `zig test src/tests.zig -O ReleaseFast --test-filter "bitpack"`
-2. **Hypothesis:** One clear claim (e.g. “byte-aligned `num_bits % 8` avoids shift loop”).
+1. **Baseline:** Run `bitpackTime` with **`-O ReleaseFast`** before edits to get timings across **all `num_bits` 0–24**:
+   - `zig test src/tests.zig -O ReleaseFast --test-filter bitpackTime`
+2. **Hypothesis:** One clear claim (e.g. "bulk loading reduces refill branches").
 3. **Minimal diff:** Touch only what the hypothesis requires; keep correctness tests green.
-4. **Measure again:** Same filter; note variance (Windows ±15–25% is normal — run multiple times or report range).
-5. **Document (append-only — see below).**
+4. **Measure again:** Run `bitpackTime` again; compare **all widths**, not just one. Note variance (Windows ±15–25% is normal — run multiple times or report range).
+5. **Document** — see below.
 
 ## Correctness
 
 - Packed byte length: **`(num_values * num_bits + 7) / 8`** required in buffer; truncating division is wrong for tails.
-- After changes, ensure **`bitpacking`** and **`bitpack decodeInto`** (if relevant) still pass.
+- After changes, ensure **`bitpacking`** and **`bitpack decodeInto`** still pass.
 
-## How to update `docs/bitpack_optimization.md` (append-only)
+## How to update `docs/bitpack_optimization.md`
 
-**Do not delete, shorten, or reorder** historical experiment sections or old rows in the master performance table. **Append** new material only.
+### Performance table (`## Performance table`)
+
+The main table shows **`bitpackTime`** results across **all `num_bits` 0–24** (10 iters × 1M values, ms). Each significant iteration gets its own column.
+
+- When adding a new iteration with measurable impact, **add a new column** to the table (e.g. `Iter N (label)`).
+- Always run `bitpackTime` to populate the full column — do **not** only measure a single `num_bits`.
+- Use **—** for columns where data was never recorded.
 
 ### Experiment log (`## Experiment log`)
 
@@ -37,33 +52,14 @@ Assume **Zig 0.15.x** and **`std.array_list.Managed`** where the codebase uses i
 ```markdown
 ### Iteration N — Short title
 
-**Hypothesis:** …
-**Change:** …
-**Result:** … (tables / numbers)
+One-paragraph summary: what changed, key numbers, verdict.
+
 **Verdict:** Keep | Revert | Partial …
 ```
 
 - Increment **`N`** from the last iteration in the file.
-- **Never remove** prior `### Iteration …` blocks. Typos: fix only with explicit user OK if it rewrites history.
-
-### Master performance table (`## Master performance table`)
-
-- **Append** one or more new **rows at the bottom** of the table (next `#` index).
-- Columns stay consistent with the existing header (e.g. `# | Step | Scalar 15×1M (ms) | u64 20×1M003 (ms) | Notes`).
-- If a column does not apply, use **—** (same as prior rows).
-- **Do not delete** old rows; **do not reorder** rows to sort by speed.
-
-### Latest timings / `bitpackTime` snapshots
-
-- Prefer **appending** a new dated snapshot rather than overwriting the only snapshot:
-
-```markdown
-### Snapshot YYYY-MM-DD (optional label)
-
-[same table shapes as existing Latest section]
-```
-
-- If the doc owner keeps a **single** “current” table without history, only update that block when they explicitly ask to refresh the snapshot — still **do not** erase the experiment log or master table rows.
+- **Never remove** prior `### Iteration …` blocks.
+- Keep entries **concise** — a few sentences, not full tables (the performance table has the numbers).
 
 ### Findings / Ideas sections
 
@@ -74,18 +70,18 @@ Assume **Zig 0.15.x** and **`std.array_list.Managed`** where the codebase uses i
 
 ```sh
 cd maya-zig
-zig test src/tests.zig -O ReleaseFast --test-filter "bitpack"
-zig test src/tests.zig -O ReleaseFast --test-filter bitpacking
-zig test src/tests.zig -O ReleaseFast --test-filter "bitpack perf"
-zig test src/tests.zig -O ReleaseFast --test-filter bitpackTime
+zig test src/tests.zig -O ReleaseFast --test-filter bitpackTime        # perf: all num_bits
+zig test src/tests.zig -O ReleaseFast --test-filter bitpacking          # correctness
+zig test src/tests.zig -O ReleaseFast --test-filter "bitpack decodeInto" # correctness
+zig test src/tests.zig -O ReleaseFast --test-filter "bitpack perf"      # perf: num_bits=3 only
 ```
 
 ## Anti-patterns
 
-- Replacing the whole doc to “clean it up” (loses experiment history).
-- Sorting the master table by speed (breaks chronological experiment record).
+- Measuring only a single `num_bits` (e.g. 3) and missing regressions at other widths.
 - Declaring victory on **one** noisy timing sample.
 - Broad refactors mixed with a single bitpack hypothesis.
+- Removing the `u128` bulk-refill without a replacement — byte-at-a-time refill is ~2–3× slower on non-aligned widths.
 
 ## Optional deep dive
 
