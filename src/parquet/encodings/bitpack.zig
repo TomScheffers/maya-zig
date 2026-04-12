@@ -25,27 +25,43 @@ fn decodePackByteAligned(comptime T: type, input: []const u8, output: []T, num_b
 
 fn decodePackBitStream(comptime T: type, input: []const u8, output: []T, num_bits: usize, num_values: usize) !void {
     const msk: u64 = (@as(u64, 1) << @intCast(num_bits)) - 1;
-    const sh: u7 = @intCast(num_bits);
-    var acc: u128 = 0;
+    const sh: u6 = @intCast(num_bits);
+    var lo: u64 = 0;
+    var hi: u64 = 0;
     var avail: usize = 0;
     var in_i: usize = 0;
     for (0..num_values) |i| {
         if (avail < num_bits) {
             if (in_i + 8 <= input.len) {
-                acc |= @as(u128, std.mem.readInt(u64, input[in_i..][0..8], .little)) << @intCast(avail);
+                const w = std.mem.readInt(u64, input[in_i..][0..8], .little);
                 in_i += 8;
+                if (avail == 0) {
+                    lo = w;
+                } else {
+                    lo |= w << @intCast(avail);
+                    hi = w >> @intCast(64 - avail);
+                }
                 avail += 64;
             } else {
                 while (avail < num_bits) {
                     if (in_i >= input.len) return error.BufferTooSmall;
-                    acc |= @as(u128, input[in_i]) << @intCast(avail);
+                    if (avail < 64) {
+                        lo |= @as(u64, input[in_i]) << @intCast(avail);
+                    } else {
+                        hi |= @as(u64, input[in_i]) << @intCast(avail - 64);
+                    }
                     in_i += 1;
                     avail += 8;
                 }
             }
         }
-        output[i] = @intCast(@as(u64, @truncate(acc)) & msk);
-        acc >>= sh;
+        output[i] = @intCast(lo & msk);
+        if (avail > 64) {
+            lo = (lo >> sh) | (hi << @intCast(64 - num_bits));
+            hi >>= sh;
+        } else {
+            lo >>= sh;
+        }
         avail -= num_bits;
     }
 }

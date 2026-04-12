@@ -165,12 +165,27 @@ test "bitpack perf" {
     }
 }
 
+fn yellowTripdataParquetPath(allocator: std.mem.Allocator) ![]const u8 {
+    const file_name = "yellow_tripdata_2026-01.parquet";
+    const rel_attempts: []const []const []const u8 = &.{
+        &.{ "data", file_name },
+        &.{ "maya-zig", "data", file_name },
+    };
+    for (rel_attempts) |parts| {
+        const p = try std.fs.path.join(allocator, parts);
+        std.fs.cwd().access(p, .{}) catch continue;
+        return p;
+    }
+    return error.MissingYellowTripdataFixture;
+}
+
 test "read" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const path = "./data/yellow_tripdata_2026-01.parquet";
+    // readParquet uses cwd-relative paths; try repo-root and parent-folder layouts.
+    const path = try yellowTripdataParquetPath(allocator);
 
     const start = try Instant.now();
     const frame = try parquet.readParquet(path, allocator);
