@@ -74,9 +74,9 @@ pub fn main() !void {
     defer pool.deinit();
 
     // Data init
-    var from = try std.ArrayList(f32).initCapacity(allocator, len);
+    var from = try std.array_list.Managed(f32).initCapacity(allocator, len);
     defer from.deinit();
-    var to = try std.ArrayList(f32).initCapacity(allocator, len);
+    var to = try std.array_list.Managed(f32).initCapacity(allocator, len);
     defer to.deinit();
 
     for (0..len) |i| {

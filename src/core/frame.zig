@@ -8,7 +8,7 @@ const LargeString: type = @import("../utils/string.zig").LargeString;
 const Expr = @import("expr.zig").Expr;
 
 pub const Chunk: type = struct {
-    columns: std.ArrayList(Series),
+    columns: std.array_list.Managed(Series),
 
     pub fn deinit(self: Chunk) void {
         for (self.columns.items) |c| {
@@ -17,8 +17,8 @@ pub const Chunk: type = struct {
         self.columns.deinit();
     }
 
-    pub fn get_column_names(self: *Chunk, allocator: std.mem.Allocator) !std.ArrayList(LargeString) {
-        var column_names = std.ArrayList(LargeString).initCapacity(allocator, self.columns.items.len);
+    pub fn get_column_names(self: *Chunk, allocator: std.mem.Allocator) !std.array_list.Managed(LargeString) {
+        var column_names = try std.array_list.Managed(LargeString).initCapacity(allocator, self.columns.items.len);
         for (self.columns.items) |column| {
             try column_names.append(column.name);
         }
@@ -41,7 +41,7 @@ pub const Chunk: type = struct {
 };
 
 pub const Frame: type = struct {
-    chunks: std.ArrayList(Chunk),
+    chunks: std.array_list.Managed(Chunk),
 
     pub fn deinit(self: Frame) void {
         for (self.chunks.items) |c| {
@@ -56,7 +56,7 @@ pub const Frame: type = struct {
         }
     }
 
-    pub fn group_by(self: Frame, names: std.ArrayList([]const u8), allocator: std.mem.Allocator) !void {
+    pub fn group_by(self: Frame, names: std.array_list.Managed([]const u8), allocator: std.mem.Allocator) !void {
         // TODO: Kick out columns which are constants (Dictionary len == 1)
 
         // 3 types: 0. no columns, 1. single column, 2. multiple dictionaries, 3. multiple
@@ -82,7 +82,7 @@ pub const Frame: type = struct {
         const chunk = self.chunks.items[0];
 
         // Calculate column widths
-        var columnWidths = try std.ArrayList(usize).initCapacity(allocator, chunk.columns.items.len);
+        var columnWidths = try std.array_list.Managed(usize).initCapacity(allocator, chunk.columns.items.len);
         defer columnWidths.deinit();
 
         for (chunk.columns.items) |column| {

@@ -6,26 +6,26 @@ pub const array_map = @import("array_map.zig");
 
 pub fn ArrayType(comptime T: type) type {
     return struct {
-        data: std.ArrayList(T),
+        data: std.array_list.Managed(T),
         const data_type = T;
         const Self = @This();
 
         pub fn init(data: []T, allocator: std.mem.Allocator) Self {
-            const tmp = std.ArrayList(data_type).fromOwnedSlice(allocator, data);
+            const tmp = std.array_list.Managed(data_type).fromOwnedSlice(allocator, data);
             return Self{ .data = tmp };
         }
 
         pub fn initEmpty(allocator: std.mem.Allocator) Self {
-            const tmp = std.ArrayList(data_type).init(allocator);
+            const tmp = std.array_list.Managed(data_type).init(allocator);
             return Self{ .data = tmp };
         }
 
         pub fn initCapacity(capacity: usize, allocator: std.mem.Allocator) !Self {
-            const tmp = try std.ArrayList(data_type).initCapacity(allocator, capacity);
+            const tmp = try std.array_list.Managed(data_type).initCapacity(allocator, capacity);
             return Self{ .data = tmp };
         }
 
-        pub fn fromArrayList(data: std.ArrayList(T)) Self {
+        pub fn fromArrayList(data: std.array_list.Managed(T)) Self {
             return Self{ .data = data };
         }
 
@@ -94,7 +94,7 @@ pub const Array = union(DataType) {
 
     const Self = Array;
 
-    pub fn fromArrayList(comptime T: type, data: std.ArrayList(T)) Self {
+    pub fn fromArrayList(comptime T: type, data: std.array_list.Managed(T)) Self {
         return switch (T) {
             bool => Self{ .Boolean = ArrayType(T).fromArrayList(data) },
             u8 => Self{ .UInt8 = ArrayType(T).fromArrayList(data) },
@@ -190,7 +190,7 @@ pub const Series: type = struct {
             switch (dic) {
                 inline else => |x| {
                     const T = @TypeOf(x).data_type;
-                    var arr = try std.ArrayList(T).initCapacity(self.allocator, self.len());
+                    var arr = try std.array_list.Managed(T).initCapacity(self.allocator, self.len());
                     for (self.data.UInt32.data.items) |idx| {
                         try arr.append(x.data.items[idx]);
                     }

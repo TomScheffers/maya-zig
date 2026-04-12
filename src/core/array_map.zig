@@ -17,7 +17,7 @@ const AnyHasher = struct {
 };
 
 pub const ArrayMapAny: type = struct {
-    map: std.HashMap(Any, std.ArrayList(usize), AnyHasher, std.hash_map.default_max_load_percentage),
+    map: std.HashMap(Any, std.array_list.Managed(usize), AnyHasher, std.hash_map.default_max_load_percentage),
     const Self = @This();
 
     fn deinit(self: Self) void {
@@ -34,25 +34,25 @@ pub const ArrayMapAny: type = struct {
                 const data_type = comptime x.getZigType();
 
                 // Hash the default type
-                var map = std.AutoHashMap(data_type, std.ArrayList(usize)).init(allocator);
+                var map = std.AutoHashMap(data_type, std.array_list.Managed(usize)).init(allocator);
                 defer map.deinit();
 
                 for (@field(array, tag).data.items, 0..) |d, i| {
                     if (map.getPtr(d)) |al| {
                         try al.append(i);
                     } else {
-                        var al = std.ArrayList(usize).init(allocator);
+                        var al = std.array_list.Managed(usize).init(allocator);
                         try al.append(i);
                         try map.put(d, al);
                     }
                 }
 
                 // Convert keys to Any values
-                var any_map = std.HashMap(Any, std.ArrayList(usize), AnyHasher, std.hash_map.default_max_load_percentage).init(allocator);
+                var any_map = std.HashMap(Any, std.array_list.Managed(usize), AnyHasher, std.hash_map.default_max_load_percentage).init(allocator);
                 var iterator = map.iterator();
                 while (iterator.next()) |entry| {
                     const key = Any.init(data_type, entry.key_ptr.*);
-                    var idxs = try std.ArrayList(usize).initCapacity(allocator, entry.value_ptr.*.capacity);
+                    var idxs = try std.array_list.Managed(usize).initCapacity(allocator, entry.value_ptr.*.capacity);
                     try idxs.appendSlice(try entry.value_ptr.*.toOwnedSlice());
                     try any_map.put(key, idxs);
                 }
@@ -65,7 +65,7 @@ pub const ArrayMapAny: type = struct {
 
 pub const ArrayMap: type = struct {
     keys: Array,
-    indices: std.ArrayList(std.ArrayList(usize)),
+    indices: std.array_list.Managed(std.array_list.Managed(usize)),
     const Self = @This();
 
     fn deinit(self: Self) void {
@@ -82,26 +82,26 @@ pub const ArrayMap: type = struct {
                 const data_type = comptime x.getZigType();
 
                 // Hash the default type
-                var map = std.AutoHashMap(data_type, std.ArrayList(usize)).init(allocator);
+                var map = std.AutoHashMap(data_type, std.array_list.Managed(usize)).init(allocator);
                 defer map.deinit();
 
                 for (@field(array, tag).data.items, 0..) |d, i| {
                     if (map.getPtr(d)) |al| {
                         try al.append(i);
                     } else {
-                        var al = std.ArrayList(usize).init(allocator);
+                        var al = std.array_list.Managed(usize).init(allocator);
                         try al.append(i);
                         try map.put(d, al);
                     }
                 }
 
                 // Convert keys to Array
-                var keys = try std.ArrayList(data_type).initCapacity(allocator, map.count());
-                var indices = try std.ArrayList(std.ArrayList(usize)).initCapacity(allocator, map.count());
+                var keys = try std.array_list.Managed(data_type).initCapacity(allocator, map.count());
+                var indices = try std.array_list.Managed(std.array_list.Managed(usize)).initCapacity(allocator, map.count());
                 var iterator = map.iterator();
                 while (iterator.next()) |entry| {
                     try keys.append(entry.key_ptr.*);
-                    var idxs = try std.ArrayList(usize).initCapacity(allocator, entry.value_ptr.*.items.len);
+                    var idxs = try std.array_list.Managed(usize).initCapacity(allocator, entry.value_ptr.*.items.len);
                     try idxs.appendSlice(try entry.value_ptr.*.toOwnedSlice());
                     try indices.append(idxs);
                 }

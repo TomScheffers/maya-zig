@@ -152,8 +152,8 @@ pub const SchemaElement: type = struct {
     }
 };
 
-fn parseSchema(data: thift.TValue, allocator: Allocator) !std.ArrayList(SchemaElement) {
-    var schema = std.ArrayList(SchemaElement).init(allocator);
+fn parseSchema(data: thift.TValue, allocator: Allocator) !std.array_list.Managed(SchemaElement) {
+    var schema = std.array_list.Managed(SchemaElement).init(allocator);
     for (data.LIST.items) |s| {
         var schema_element = SchemaElement{
             .binary_type = null,
@@ -283,18 +283,18 @@ fn parsePageEncodingStats(data: thift.TValue) !PageEncodingStats {
 
 pub const ColumnMetaData: type = struct {
     binary_type: BinaryType,
-    encodings: std.ArrayList(Encoding),
-    path_in_schema: std.ArrayList([]u8),
+    encodings: std.array_list.Managed(Encoding),
+    path_in_schema: std.array_list.Managed([]u8),
     codec: CompressionCodec,
     num_values: i64,
     total_uncompressed_size: i64,
     total_compressed_size: i64,
-    key_value_metadata: ?std.ArrayList(KeyValue),
+    key_value_metadata: ?std.array_list.Managed(KeyValue),
     data_page_offset: i64,
     index_page_offset: ?i64,
     dictionary_page_offset: ?i64,
     statistics: ?void, //TODO IMPLEMENT
-    encoding_stats: std.ArrayList(PageEncodingStats),
+    encoding_stats: std.array_list.Managed(PageEncodingStats),
     bloom_filter_offset: ?i64,
     bloom_filter_length: ?i32,
     size_statistics: ?void, // TODO IMPLEMENT
@@ -310,18 +310,18 @@ pub const ColumnMetaData: type = struct {
 };
 
 fn parseColumnMetaData(data: thift.TValue, allocator: Allocator) !ColumnMetaData {
-    var encodings = std.ArrayList(Encoding).init(allocator);
+    var encodings = std.array_list.Managed(Encoding).init(allocator);
     for (getStructAtOffset(data, 2).?.LIST.items) |e| {
         try encodings.append(EncodingFromInt(e.I32).?);
     }
 
-    var path_in_schema = std.ArrayList([]u8).init(allocator);
+    var path_in_schema = std.array_list.Managed([]u8).init(allocator);
     for (getStructAtOffset(data, 3).?.LIST.items) |e| {
         const owned_path = try allocator.dupe(u8, e.BINARY);
         try path_in_schema.append(owned_path);
     }
 
-    var encoding_stats = std.ArrayList(PageEncodingStats).init(allocator);
+    var encoding_stats = std.array_list.Managed(PageEncodingStats).init(allocator);
     if (getStructAtOffset(data, 13)) |n| {
         for (n.LIST.items) |e| {
             try encoding_stats.append(try parsePageEncodingStats(e));
@@ -367,8 +367,8 @@ pub const ColumnChunk: type = struct {
     encrypted_column_metadata: ?[]u8,
 };
 
-fn parseColumnChunks(data: thift.TValue, allocator: Allocator) !std.ArrayList(ColumnChunk) {
-    var column_chunks = std.ArrayList(ColumnChunk).init(allocator);
+fn parseColumnChunks(data: thift.TValue, allocator: Allocator) !std.array_list.Managed(ColumnChunk) {
+    var column_chunks = std.array_list.Managed(ColumnChunk).init(allocator);
     for (data.LIST.items) |node| {
         const ch = ColumnChunk{
             .file_path = null,
@@ -387,7 +387,7 @@ fn parseColumnChunks(data: thift.TValue, allocator: Allocator) !std.ArrayList(Co
 }
 
 pub const RowGroup: type = struct {
-    columns: std.ArrayList(ColumnChunk),
+    columns: std.array_list.Managed(ColumnChunk),
     total_byte_size: i64,
     num_rows: i64,
     sorting_columns: ?void, // TODO IMPLEMENT
@@ -405,8 +405,8 @@ pub const RowGroup: type = struct {
     }
 };
 
-fn parseRowGroups(data: thift.TValue, allocator: Allocator) !std.ArrayList(RowGroup) {
-    var row_groups = std.ArrayList(RowGroup).init(allocator);
+fn parseRowGroups(data: thift.TValue, allocator: Allocator) !std.array_list.Managed(RowGroup) {
+    var row_groups = std.array_list.Managed(RowGroup).init(allocator);
     for (data.LIST.items) |node| {
         const rg = RowGroup{
             .columns = try parseColumnChunks(getStructAtOffset(node, 1).?, allocator),
@@ -424,10 +424,10 @@ fn parseRowGroups(data: thift.TValue, allocator: Allocator) !std.ArrayList(RowGr
 
 pub const MetaData: type = struct {
     version: i32,
-    schema: std.ArrayList(SchemaElement), // Schema
+    schema: std.array_list.Managed(SchemaElement), // Schema
     num_rows: i64,
-    row_groups: std.ArrayList(RowGroup),
-    key_value_metadata: ?std.ArrayList(KeyValue),
+    row_groups: std.array_list.Managed(RowGroup),
+    key_value_metadata: ?std.array_list.Managed(KeyValue),
     created_by: ?[]u8,
     allocator: Allocator,
 

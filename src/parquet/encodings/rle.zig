@@ -4,9 +4,9 @@ const LargeString = @import("../../utils/string.zig").LargeString;
 const helpers = @import("../../utils/helpers.zig");
 const bitpack = @import("bitpack.zig");
 
-pub fn rleDecode(buf: []u8, num_values: usize, comptime T: type, allocator: std.mem.Allocator) !std.ArrayList(T) {
+pub fn rleDecode(buf: []u8, num_values: usize, comptime T: type, allocator: std.mem.Allocator) !std.array_list.Managed(T) {
     const size = @sizeOf(T);
-    var data = try std.ArrayList(T).initCapacity(allocator, num_values);
+    var data = try std.array_list.Managed(T).initCapacity(allocator, num_values);
     var i: usize = 0;
     var j: usize = 0;
     std.debug.print("\nBuffer len {} Num values {}", .{ buf.len, num_values });
@@ -27,11 +27,11 @@ pub fn rleDecode(buf: []u8, num_values: usize, comptime T: type, allocator: std.
     return data;
 }
 
-pub fn rleHybridDecode(buf: []u8, num_bits: u5, num_values: usize, comptime T: type, allocator: std.mem.Allocator) !std.ArrayList(T) {
+pub fn rleHybridDecode(buf: []u8, num_bits: u5, num_values: usize, comptime T: type, allocator: std.mem.Allocator) !std.array_list.Managed(T) {
     // Read varint to determine if we are bitpacking or rle
     const vi = varint.decodeVarint(buf);
     if (num_bits == 0) {
-        var decoded = try std.ArrayList(T).initCapacity(allocator, num_values);
+        var decoded = try std.array_list.Managed(T).initCapacity(allocator, num_values);
         try decoded.appendNTimes(0, num_values);
         return decoded;
     } else if (vi.result & 1 == 1) {
@@ -44,13 +44,13 @@ pub fn rleHybridDecode(buf: []u8, num_bits: u5, num_values: usize, comptime T: t
     }
 }
 
-pub fn rleBitmapDecode(buf: []u8, num_values: usize, allocator: std.mem.Allocator) !std.ArrayList(u64) {
+pub fn rleBitmapDecode(buf: []u8, num_values: usize, allocator: std.mem.Allocator) !std.array_list.Managed(u64) {
     // Read varint to determine if we are bitpacking or rle
     const vi = varint.decodeVarint(buf);
     const size = (num_values + 63) / 64;
     if (vi.result & 1 == 1) {
         // bitpacking
-        var decoded = try std.ArrayList(u64).initCapacity(allocator, size);
+        var decoded = try std.array_list.Managed(u64).initCapacity(allocator, size);
         var i: usize = vi.bytes;
         while (i < buf.len) : (i += 8) {
             const v = try helpers.sliceToUInt(buf[i..@min(buf.len, i + 8)], u64);
@@ -63,7 +63,7 @@ pub fn rleBitmapDecode(buf: []u8, num_values: usize, allocator: std.mem.Allocato
         defer rle.deinit();
 
         // Bitpacking into u64
-        var decoded = try std.ArrayList(u64).initCapacity(allocator, size);
+        var decoded = try std.array_list.Managed(u64).initCapacity(allocator, size);
 
         var pack: u64 = 0;
         var bit: u7 = 0;

@@ -173,8 +173,8 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
 
     // Extract page contents
     var wait_group: std.Thread.WaitGroup = .{};
-    var thread_handles = std.ArrayList(std.Thread).init(allocator);
-    var pages = std.ArrayList(Page).init(allocator);
+    var thread_handles = std.array_list.Managed(std.Thread).init(allocator);
+    var pages = std.array_list.Managed(Page).init(allocator);
 
     var page_offset: usize = 0;
     while (page_offset < buf.len) {
@@ -197,7 +197,7 @@ pub fn readColumnChunk(buf: []u8, column_chunk: md.ColumnChunk, metadata: md.Met
 
     // Unpack pages
     var dictionary: ?Array = null;
-    var data = std.ArrayList(Series).init(allocator);
+    var data = std.array_list.Managed(Series).init(allocator);
     for (pages.items) |page| {
         switch (page) {
             md.PageType.DATA_PAGE => {

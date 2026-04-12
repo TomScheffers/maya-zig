@@ -31,7 +31,7 @@ pub const LiteralExpr: type = struct {
         switch (self.value) {
             inline else => |v| {
                 const T = comptime @TypeOf(v);
-                var arr = try std.ArrayList(T).initCapacity(allocator, chunk.columns.items.len);
+                var arr = try std.array_list.Managed(T).initCapacity(allocator, chunk.columns.items.len);
                 try arr.appendNTimes(v, chunk.columns.items[0].len());
                 const s = try Series.init(null, DataType.getDataType(T), series.Array.fromArrayList(T, arr), null, null, allocator);
                 return s;

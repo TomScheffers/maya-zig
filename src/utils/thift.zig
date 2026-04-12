@@ -17,10 +17,10 @@ pub const TValue: type = union(TValueTag) {
     I64: i64,
     DOUBLE: f64,
     BINARY: []u8,
-    LIST: std.ArrayList(TValue),
-    SET: std.ArrayList(TValue),
-    MAP: struct { keys: std.ArrayList(TValue), values: std.ArrayList(TValue) },
-    STRUCT: struct { offsets: std.ArrayList(u32), values: std.ArrayList(TValue) },
+    LIST: std.array_list.Managed(TValue),
+    SET: std.array_list.Managed(TValue),
+    MAP: struct { keys: std.array_list.Managed(TValue), values: std.array_list.Managed(TValue) },
+    STRUCT: struct { offsets: std.array_list.Managed(u32), values: std.array_list.Managed(TValue) },
     UUID: []u8,
     NULL: void,
 
@@ -214,7 +214,7 @@ pub fn procceedNodeWithConfig(data: []u8, offset: *usize, field_type: u4, alloca
         },
         9, 10 => {
             if (offset.* >= data.len) return ThriftError.BufferUnderflow;
-            var list = std.ArrayList(TValue).init(allocator);
+            var list = std.array_list.Managed(TValue).init(allocator);
             errdefer {
                 for (list.items) |item| {
                     item.deinit();
@@ -253,8 +253,8 @@ pub fn procceedNodeWithConfig(data: []u8, offset: *usize, field_type: u4, alloca
         },
         11 => {
             if (offset.* >= data.len) return ThriftError.BufferUnderflow;
-            var keys = std.ArrayList(TValue).init(allocator);
-            var values = std.ArrayList(TValue).init(allocator);
+            var keys = std.array_list.Managed(TValue).init(allocator);
+            var values = std.array_list.Managed(TValue).init(allocator);
             errdefer {
                 for (keys.items) |key| key.deinit();
                 for (values.items) |value| value.deinit();
@@ -289,8 +289,8 @@ pub fn procceedNodeWithConfig(data: []u8, offset: *usize, field_type: u4, alloca
             return TValue{ .MAP = .{ .keys = keys, .values = values } };
         },
         12 => {
-            var offsets = std.ArrayList(u32).init(allocator);
-            var values = std.ArrayList(TValue).init(allocator);
+            var offsets = std.array_list.Managed(u32).init(allocator);
+            var values = std.array_list.Managed(TValue).init(allocator);
             errdefer {
                 for (values.items) |value| value.deinit();
                 offsets.deinit();

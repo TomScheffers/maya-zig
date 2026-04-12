@@ -123,7 +123,7 @@ pub const ParquetReader = struct {
         }
 
         const row_group = self.metadata.row_groups.items[row_group_idx];
-        var selected_columns = std.ArrayList(series.Series).init(self.allocator);
+        var selected_columns = std.array_list.Managed(series.Series).init(self.allocator);
 
         // If no column names specified, read all columns
         if (column_names == null) {
@@ -150,7 +150,7 @@ pub const ParquetReader = struct {
 
     // Read specific columns from all row groups
     pub fn readAllRowGroupsSelective(self: *ParquetReader, column_names: ?[]const []const u8) !Frame {
-        var chunks = std.ArrayList(Chunk).init(self.allocator);
+        var chunks = std.array_list.Managed(Chunk).init(self.allocator);
 
         for (0..self.metadata.row_groups.items.len) |i| {
             const chunk = try self.readRowGroupSelective(i, column_names);
@@ -161,8 +161,8 @@ pub const ParquetReader = struct {
     }
 
     // Get list of available column names
-    pub fn getColumnNames(self: *ParquetReader) !std.ArrayList([]u8) {
-        var names = std.ArrayList([]u8).init(self.allocator);
+    pub fn getColumnNames(self: *ParquetReader) !std.array_list.Managed([]u8) {
+        var names = std.array_list.Managed([]u8).init(self.allocator);
 
         if (self.metadata.row_groups.items.len > 0) {
             const first_row_group = self.metadata.row_groups.items[0];
@@ -186,7 +186,7 @@ pub fn readParquetSelective(path: []const u8, column_names: ?[]const []const u8,
 }
 
 // Convenience function: Get column names from a parquet file
-pub fn getParquetColumns(path: []const u8, allocator: std.mem.Allocator) !std.ArrayList([]u8) {
+pub fn getParquetColumns(path: []const u8, allocator: std.mem.Allocator) !std.array_list.Managed([]u8) {
     var reader = try ParquetReader.init(path, allocator);
     defer reader.deinit();
 

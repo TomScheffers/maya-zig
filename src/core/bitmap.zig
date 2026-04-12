@@ -1,16 +1,16 @@
 const std = @import("std");
 
 pub const Bitmap: type = struct {
-    data: std.ArrayList(u64),
+    data: std.array_list.Managed(u64),
     len: usize,
 
     pub fn init(allocator: std.mem.Allocator) Bitmap {
-        const data = std.ArrayList(u64).init(allocator);
+        const data = std.array_list.Managed(u64).init(allocator);
         return Bitmap{ .data = data, .len = 0 };
     }
 
     pub fn initCapacity(capacity: usize, allocator: std.mem.Allocator) !Bitmap {
-        const data = try std.ArrayList(u64).initCapacity(allocator, capacity);
+        const data = try std.array_list.Managed(u64).initCapacity(allocator, capacity);
         return Bitmap{ .data = data, .len = 0 };
     }
 

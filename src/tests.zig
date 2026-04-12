@@ -10,13 +10,13 @@ test "bitmap extend" {
     const allocator = std.testing.allocator;
 
     const va: u64 = 0b1111100000;
-    var ba = std.ArrayList(u64).init(allocator);
+    var ba = std.array_list.Managed(u64).init(allocator);
     try ba.append(va);
     var a = bitmap.Bitmap{ .data = ba, .len = 10 };
     defer a.deinit();
 
     const vb: u64 = 0b1010101010101010101010101010101010101010101010101010101010101010;
-    var bb = std.ArrayList(u64).init(allocator);
+    var bb = std.array_list.Managed(u64).init(allocator);
     try bb.append(vb);
 
     const vb2: u64 = 0b111111111111111111111111111111111111111111111111111111111111111;
@@ -79,7 +79,7 @@ test "bitpacking" {
     const decoded = try enc.bitpack.bitpackDecodeSIMD(&data, num_bits, length, u64, allocator);
     defer decoded.deinit();
 
-    std.debug.print("Decoded {d}", .{decoded.items});
+    std.debug.print("Decoded {any}", .{decoded.items});
 
     try std.testing.expect(std.mem.eql(u64, decoded.items, &exp));
 }
@@ -117,7 +117,7 @@ test "groupby" {
     _ = try frame.print(allocator);
 
     // Group by
-    var names = std.ArrayList([]const u8).init(allocator);
+    var names = std.array_list.Managed([]const u8).init(allocator);
     defer names.deinit();
 
     try names.append("store_key");

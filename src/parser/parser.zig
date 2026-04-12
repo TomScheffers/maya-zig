@@ -84,7 +84,7 @@ const SqlJoinFrame: type = struct {
     right: SqlSource,
     method: SqlJoinMethod,
     on: ?SqlNamedExpr,
-    using: ?std.ArrayList([]const u8),
+    using: ?std.array_list.Managed([]const u8),
 
     pub fn deinit(self: SqlJoinFrame) void {
         self.right.deinit();
@@ -98,11 +98,11 @@ const SqlJoinFrame: type = struct {
 };
 
 const SqlFrame: type = struct {
-    selections: std.ArrayList(SqlNamedExpr), // SELECT ...
+    selections: std.array_list.Managed(SqlNamedExpr), // SELECT ...
     source: SqlSource, // FROM ...
-    joins: std.ArrayList(SqlJoinFrame), // {} JOIN ...
+    joins: std.array_list.Managed(SqlJoinFrame), // {} JOIN ...
     where: ?SqlExpr, // WHERE ...
-    // group_by: ?std.ArrayList(SqlExpr), // GROUP BY ...
+    // group_by: ?std.array_list.Managed(SqlExpr), // GROUP BY ...
     // having: ?SqlExpr, // HAVING ...
 
     pub fn deinit(self: SqlFrame) void {
@@ -237,10 +237,10 @@ const SqlParser = struct {
         return selection;
     }
 
-    fn parseSelections(self: *SqlParser) ParserErrors!std.ArrayList(SqlNamedExpr) {
+    fn parseSelections(self: *SqlParser) ParserErrors!std.array_list.Managed(SqlNamedExpr) {
         try self.expect(tokenize.TokenType.Keyword); // Expect "SELECT"
 
-        var selections = std.ArrayList(SqlNamedExpr).init(self.allocator);
+        var selections = std.array_list.Managed(SqlNamedExpr).init(self.allocator);
         while (true) {
             const selection = try self.parseSelection();
             if (selection) |s| {
@@ -310,7 +310,7 @@ const SqlParser = struct {
                     if (jtoken) |jtk| {
                         self.position += 1;
                         if (std.mem.eql(u8, jtk.value, "USING")) { // (a, b, c)
-                            var using = std.ArrayList([]const u8).init(self.allocator);
+                            var using = std.array_list.Managed([]const u8).init(self.allocator);
                             if (self.next().?.value[0] == '(') {
                                 while (self.next()) |utk| {
                                     if (utk.value[0] == ')') {
@@ -335,8 +335,8 @@ const SqlParser = struct {
         return null;
     }
 
-    fn parseJoins(self: *SqlParser) ParserErrors!std.ArrayList(SqlJoinFrame) {
-        var joins = std.ArrayList(SqlJoinFrame).init(self.allocator);
+    fn parseJoins(self: *SqlParser) ParserErrors!std.array_list.Managed(SqlJoinFrame) {
+        var joins = std.array_list.Managed(SqlJoinFrame).init(self.allocator);
         while (try self.parseJoin()) |join| {
             try joins.append(join);
         }
@@ -367,7 +367,7 @@ test "parse" {
     // const allocator = std.testing.allocator;
 
     // Read from tokenizer
-    var tokens = std.ArrayList(Token).init(allocator);
+    var tokens = std.array_list.Managed(Token).init(allocator);
     defer tokens.deinit();
 
     const sql: []const u8 = "SELECT *, u.*, o.name, 1.0 + o.vat::float as margin FROM users as u JOIN organisations as o USING (org_key) WHERE org_key = 0";
