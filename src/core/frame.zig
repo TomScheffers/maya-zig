@@ -80,6 +80,7 @@ pub const Frame: type = struct {
 
     pub fn print(self: Frame, allocator: std.mem.Allocator) !void {
         const chunk = self.chunks.items[0];
+        var fmt_buf: [24]u8 = undefined;
 
         // Calculate column widths
         var columnWidths = try std.array_list.Managed(usize).initCapacity(allocator, chunk.columns.items.len);
@@ -88,7 +89,7 @@ pub const Frame: type = struct {
         for (chunk.columns.items) |column| {
             var maxWidth: usize = @max((column.name).len, column.data_type.fmt().len);
             for (0..10) |rowIndex| {
-                const f = try column.fmtIdx(rowIndex);
+                const f = try column.fmtIdx(&fmt_buf, rowIndex);
                 maxWidth = @max(maxWidth, f.len);
             }
             try columnWidths.append(maxWidth);
@@ -144,7 +145,7 @@ pub const Frame: type = struct {
         for (0..10) |rowIndex| {
             std.debug.print("\n| ", .{});
             for (chunk.columns.items, 0..) |column, colIndex| {
-                const f = try column.fmtIdx(rowIndex);
+                const f = try column.fmtIdx(&fmt_buf, rowIndex);
                 std.debug.print("{s}", .{f});
                 for (0..columnWidths.items[colIndex] - f.len) |_| {
                     std.debug.print(" ", .{});

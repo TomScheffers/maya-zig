@@ -50,23 +50,22 @@ pub fn ArrayType(comptime T: type) type {
             other.deinit();
         }
 
-        fn fmtIdx(self: Self, index: usize) ![]const u8 {
+        fn fmtIdx(self: Self, buf: *[24]u8, index: usize) ![]const u8 {
             if (index > self.len()) return "";
             const value = self.data.items[index];
-            var buf: [24]u8 = undefined;
             switch (data_type) {
                 bool => {
-                    return std.fmt.bufPrint(&buf, "{any}", .{value});
+                    return std.fmt.bufPrint(buf, "{any}", .{value});
                 },
                 u8, u16, u32, u64, i8, i16, i32, i64 => {
-                    return std.fmt.bufPrint(&buf, "{d}", .{value});
+                    return std.fmt.bufPrint(buf, "{d}", .{value});
                 },
                 f32, f64 => {
-                    return std.fmt.bufPrint(&buf, "{d:.2}", .{value});
+                    return std.fmt.bufPrint(buf, "{d:.2}", .{value});
                 },
                 LargeString => {
-                    buf = value.fmt(24);
-                    return &buf;
+                    buf.* = value.fmt(24);
+                    return buf[0..@min(value.length, 24)];
                 },
                 else => {
                     return "";
@@ -123,9 +122,9 @@ pub const Array = union(DataType) {
         }
     }
 
-    pub fn fmtIdx(self: Self, index: usize) ![]const u8 {
+    pub fn fmtIdx(self: Self, buf: *[24]u8, index: usize) ![]const u8 {
         switch (self) {
-            inline else => |x| return x.fmtIdx(index),
+            inline else => |x| return x.fmtIdx(buf, index),
         }
     }
 
@@ -201,21 +200,21 @@ pub const Series: type = struct {
         }
     }
 
-    pub fn fmtIdx(self: Self, index: usize) ![]const u8 {
+    pub fn fmtIdx(self: Self, buf: *[24]u8, index: usize) ![]const u8 {
         if (self.dictionary) |d| {
             switch (self.data) {
                 .UInt32 => |x| {
                     const didx: usize = @intCast(x.data.items[index]);
-                    return d.fmtIdx(didx);
+                    return d.fmtIdx(buf, didx);
                 },
                 .UInt64 => |x| {
                     const didx: usize = @intCast(x.data.items[index]);
-                    return d.fmtIdx(didx);
+                    return d.fmtIdx(buf, didx);
                 },
                 else => unreachable,
             }
         } else {
-            return self.data.fmtIdx(index);
+            return self.data.fmtIdx(buf, index);
         }
     }
 
