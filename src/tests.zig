@@ -84,6 +84,22 @@ test "bitpacking" {
     try std.testing.expect(std.mem.eql(u64, decoded.items, &exp));
 }
 
+test "bitpack decodeInto" {
+    const num_bits: usize = 3;
+    const length = 16;
+    var data = [_]u8{ 0b10001000, 0b11000110, 0b11111010, 0b10001000, 0b11000110, 0b11111010 };
+    const exp = [_]u64{ 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7 };
+    var out: [16]u64 = undefined;
+    try enc.bitpack.bitpackDecodeInto(&data, num_bits, length, u64, &out);
+    try std.testing.expectEqualSlices(u64, &exp, &out);
+
+    // Byte-aligned width: one u8 per value
+    const bytes = [_]u8{ 0x10, 0x20, 0x30 };
+    var out8: [3]u32 = undefined;
+    try enc.bitpack.bitpackDecodeInto(&bytes, 8, 3, u32, &out8);
+    try std.testing.expectEqualSlices(u32, &[_]u32{ 0x10, 0x20, 0x30 }, &out8);
+}
+
 fn fillBufWithPattern(buf: []u8, pattern: []const u8) void {
     var off: usize = 0;
     while (off < buf.len) {
@@ -154,7 +170,7 @@ test "read" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const path = "data/stock_current/org_key=0/file.parquet";
+    const path = "./data/yellow_tripdata_2026-01.parquet";
 
     const start = try Instant.now();
     const frame = try parquet.readParquet(path, allocator);
