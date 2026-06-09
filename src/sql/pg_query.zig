@@ -15,7 +15,7 @@ pub const ParseFailure = struct {
         if (self.cursorpos >= 0) {
             try writer.print("SQL parse error at position {d}: {s}", .{ self.cursorpos, self.message });
         } else {
-            try writer.print("SQL parse error: {s}", .{self.message });
+            try writer.print("SQL parse error: {s}", .{self.message});
         }
     }
 };

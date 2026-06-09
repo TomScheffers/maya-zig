@@ -116,7 +116,7 @@ const String: type = struct {
         } else if (self.length <= 12) {
             const mx = @min(self.length, N);
             @memcpy(buf[0..4], self.prefix[0..]);
-            const trail: *[8]u8 = @constCast(@ptrCast(self.trailing.?)); // Trailing is not actually a pointer
+            const trail: *[8]u8 = @ptrCast(@constCast(self.trailing.?)); // Trailing is not actually a pointer
             @memcpy(buf[4..mx], trail[0 .. mx - 4]);
         } else {
             const mx = @min(self.length, N);
