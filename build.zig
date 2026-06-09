@@ -45,8 +45,14 @@ pub fn build(b: *std.Build) void {
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
 
+    // Optional: zig build test -Dtest-filter=todo.expr
+    // Multiple filters: zig build test -Dtest-filter=foo -Dtest-filter=bar
+    // (compile-time filter; do not pass --test-filter to the test executable in 0.16+)
+    const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
+
     const mod_tests = b.addTest(.{
         .root_module = maya_mod,
+        .filters = test_filters,
     });
     mod_tests.root_module.linkLibrary(pg_query_lib);
     mod_tests.root_module.link_libc = true;

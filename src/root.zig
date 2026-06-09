@@ -20,6 +20,8 @@ pub const io = struct {
 
 pub const sql = struct {
     pub const pg_query = @import("sql/pg_query.zig");
+    pub const ast = @import("sql/ast/mod.zig");
+    pub const transform = @import("sql/transform/mod.zig");
 };
 
 pub const util = struct {
@@ -35,4 +37,8 @@ pub const parquet = io.parquet;
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("tests.zig");
+    _ = @import("sql/transform/from.zig");
+    _ = @import("sql/transform/expr.zig");
+    _ = @import("sql/ast/expr_analysis.zig");
+    _ = @import("sql/ast/expr_analysis_todo.zig");
 }
