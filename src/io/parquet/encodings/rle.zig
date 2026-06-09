@@ -1,7 +1,7 @@
 const std = @import("std");
-const varint = @import("../../utils/varint.zig");
-const LargeString = @import("../../utils/string.zig").LargeString;
-const helpers = @import("../../utils/helpers.zig");
+const varint = @import("../../../util/varint.zig");
+const LargeString = @import("../../../util/string.zig").LargeString;
+const helpers = @import("../../../util/helpers.zig");
 const bitpack = @import("bitpack.zig");
 
 pub fn rleDecode(buf: []u8, num_values: usize, comptime T: type, allocator: std.mem.Allocator) !std.array_list.Managed(T) {

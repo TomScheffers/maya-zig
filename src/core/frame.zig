@@ -4,7 +4,7 @@ const Any = @import("datatype.zig").Any;
 const series = @import("series.zig");
 const Series = series.Series;
 const ArrayMap = @import("array_map.zig").ArrayMap;
-const LargeString: type = @import("../utils/string.zig").LargeString;
+const LargeString: type = @import("../util/string.zig").LargeString;
 const Expr = @import("expr.zig").Expr;
 
 pub const Chunk: type = struct {

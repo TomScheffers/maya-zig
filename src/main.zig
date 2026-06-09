@@ -1,9 +1,13 @@
 const std = @import("std");
-const parquet = @import("parquet/read.zig");
-const bitmap = @import("core/bitmap.zig");
-const Expr = @import("core/expr.zig").Expr;
+const maya = @import("maya");
+const parquet = maya.parquet;
+const Expr = maya.Expr;
 
 pub fn main() !void {
+    var io_instance = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer io_instance.deinit();
+    const io = io_instance.io();
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -13,7 +17,7 @@ pub fn main() !void {
     // Demo 1: Standard parquet reading (optimized approach)
     std.debug.print("=== Optimized Parquet Reading ===\n", .{});
 
-    var frame = try parquet.readParquet(path, allocator);
+    var frame = try parquet.readParquet(io, path, allocator);
     defer frame.deinit();
 
     // Print frame info
@@ -32,7 +36,7 @@ pub fn main() !void {
     std.debug.print("\n=== Experimental Selective Reading ===\n", .{});
 
     // First, safely get column names
-    const column_names = parquet.getParquetColumns(path, allocator) catch |err| {
+    const column_names = parquet.getParquetColumns(io, path, allocator) catch |err| {
         std.debug.print("Could not get column names: {}\n", .{err});
         return;
     };
@@ -52,7 +56,7 @@ pub fn main() !void {
     if (column_names.items.len >= 2) {
         std.debug.print("\nAttempting selective reading...\n", .{});
         const selected_columns = [_][]const u8{ "technical", "org_key" };
-        var frame_selective = parquet.readParquetSelective(path, &selected_columns, allocator) catch |err| {
+        var frame_selective = parquet.readParquetSelective(io, path, &selected_columns, allocator) catch |err| {
             std.debug.print("Selective reading failed (expected): {}\n", .{err});
             std.debug.print("This is normal - we're debugging the buffer issue\n", .{});
             return;

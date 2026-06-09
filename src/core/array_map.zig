@@ -1,7 +1,7 @@
 const std = @import("std");
 pub const DataType = @import("datatype.zig").DataType;
 pub const Any = @import("datatype.zig").Any;
-pub const LargeString: type = @import("../utils/string.zig").LargeString;
+pub const LargeString: type = @import("../util/string.zig").LargeString;
 pub const Array = @import("series.zig").Array;
 
 const AnyHasher = struct {

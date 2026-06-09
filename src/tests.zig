@@ -1,10 +1,19 @@
 const std = @import("std");
 const time = std.time;
-const Instant = time.Instant;
-const parquet = @import("parquet/read.zig");
-const enc = @import("parquet/encodings/mod.zig");
+const Io = std.Io;
+const io = std.testing.io;
+const parquet = @import("io/parquet/read.zig");
+const enc = @import("io/parquet/encodings/mod.zig");
 const bitmap = @import("core/bitmap.zig");
 const Expr = @import("core/expr.zig").Expr;
+
+fn monotonicNow() Io.Clock.Timestamp {
+    return Io.Clock.Timestamp.now(io, .awake);
+}
+
+fn elapsedNs(start: Io.Clock.Timestamp, end: Io.Clock.Timestamp) i96 {
+    return Io.Clock.Timestamp.durationTo(start, end).raw.toNanoseconds();
+}
 
 test "bitmap extend" {
     const allocator = std.testing.allocator;
@@ -47,13 +56,13 @@ test "bitpackTime" {
         const buf = try allocator.alloc(u8, num_bytes);
         defer allocator.free(buf);
 
-        const start = try Instant.now();
+        const start = monotonicNow();
         for (0..10) |_| {
             const decoded = try enc.bitpack.bitpackDecode(buf, @intCast(num_bits), num_values, u32, allocator);
             defer decoded.deinit();
         }
-        const end = try Instant.now();
-        const elapsed1: f64 = @floatFromInt(end.since(start));
+        const end = monotonicNow();
+        const elapsed1: f64 = @floatFromInt(elapsedNs(start, end));
         std.debug.print("\nTime elapsed for num_bits {d} and buf len {d} is: {d:.3}ms\n", .{ num_bits, buf.len, elapsed1 / time.ns_per_ms });
     }
 }
@@ -127,12 +136,12 @@ test "bitpack perf" {
             d.deinit();
         }
         const iters: usize = 15;
-        var timer = try std.time.Timer.start();
+        const start = monotonicNow();
         for (0..iters) |_| {
             const d = try enc.bitpack.bitpackDecode(buf, num_bits, num_values, u32, allocator);
             d.deinit();
         }
-        const elapsed = timer.read();
+        const elapsed = elapsedNs(start, monotonicNow());
         std.debug.print(
             "\n[scalar u32] num_bits=3 {d} iters x 1M vals: {d:.3} ms total\n",
             .{ iters, @as(f64, @floatFromInt(elapsed)) / time.ns_per_ms },
@@ -152,12 +161,12 @@ test "bitpack perf" {
             d.deinit();
         }
         const iters: usize = 20;
-        var timer = try std.time.Timer.start();
+        const start = monotonicNow();
         for (0..iters) |_| {
             const d = try enc.bitpack.bitpackDecode(buf, num_bits, num_values, u64, allocator);
             d.deinit();
         }
-        const elapsed = timer.read();
+        const elapsed = elapsedNs(start, monotonicNow());
         std.debug.print(
             "\n[u64 residual] num_bits=3 {d} iters x 1M003 vals: {d:.3} ms total\n",
             .{ iters, @as(f64, @floatFromInt(elapsed)) / time.ns_per_ms },
@@ -173,7 +182,7 @@ fn yellowTripdataParquetPath(allocator: std.mem.Allocator) ![]const u8 {
     };
     for (rel_attempts) |parts| {
         const p = try std.fs.path.join(allocator, parts);
-        std.fs.cwd().access(p, .{}) catch continue;
+        std.Io.Dir.cwd().access(io, p, .{}) catch continue;
         return p;
     }
     return error.MissingYellowTripdataFixture;
@@ -187,10 +196,10 @@ test "read" {
     // readParquet uses cwd-relative paths; try repo-root and parent-folder layouts.
     const path = try yellowTripdataParquetPath(allocator);
 
-    const start = try Instant.now();
-    const frame = try parquet.readParquet(path, allocator);
-    const end = try Instant.now();
-    const elapsed: f64 = @floatFromInt(end.since(start));
+    const start = monotonicNow();
+    const frame = try parquet.readParquet(io, path, allocator);
+    const end = monotonicNow();
+    const elapsed: f64 = @floatFromInt(elapsedNs(start, end));
     _ = try frame.print(allocator);
     std.debug.print("\nTime elapsed for parquet reading is: {d:.3}s\n", .{elapsed / time.ns_per_s});
 }
@@ -199,11 +208,11 @@ test "groupby" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    // const allocator = std.testing.allocator;
 
-    //const path = "data/stock/store_key=1/00000000.parquet";
     const path = "data/stock_current/org_key=0/file.parquet";
-    var frame = try parquet.readParquet(path, allocator);
+    std.Io.Dir.cwd().access(io, path, .{}) catch return error.SkipZigTest;
+
+    var frame = try parquet.readParquet(io, path, allocator);
 
     // Evaluate expression
     const e = Expr.column("technical").add(&Expr.column("org_key"));

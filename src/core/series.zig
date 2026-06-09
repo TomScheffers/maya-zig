@@ -1,7 +1,7 @@
 const std = @import("std");
 pub const DataType = @import("datatype.zig").DataType;
 pub const Bitmap = @import("bitmap.zig").Bitmap;
-pub const LargeString: type = @import("../utils/string.zig").LargeString;
+pub const LargeString: type = @import("../util/string.zig").LargeString;
 pub const array_map = @import("array_map.zig");
 
 pub fn ArrayType(comptime T: type) type {

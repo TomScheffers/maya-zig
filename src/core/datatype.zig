@@ -1,6 +1,6 @@
 pub const std = @import("std");
-pub const LargeString: type = @import("../utils/string.zig").LargeString;
-pub const md: type = @import("../parquet/metadata.zig");
+pub const LargeString: type = @import("../util/string.zig").LargeString;
+pub const md: type = @import("../io/parquet/metadata.zig");
 
 pub const DataTypeFamily = enum { Boolean, UInt, Int, Float, Binary, Date };
 

@@ -4,10 +4,10 @@ const expect = std.testing.expect;
 const md = @import("metadata.zig");
 const page = @import("page.zig");
 
-const hlp = @import("../utils/helpers.zig");
-const ThreadSafeAllocator = @import("../utils/thread_safe_allocator.zig").ThreadSafeAllocator;
-const series = @import("../core/series.zig");
-const frame = @import("../core/frame.zig");
+const hlp = @import("../../util/helpers.zig");
+const ThreadSafeAllocator = @import("../../util/thread_safe_allocator.zig").ThreadSafeAllocator;
+const series = @import("../../core/series.zig");
+const frame = @import("../../core/frame.zig");
 const Chunk = frame.Chunk;
 const Frame = frame.Frame;
 
@@ -31,16 +31,9 @@ pub const ParquetReader = struct {
     allocator: std.mem.Allocator,
     ts_allocator: ThreadSafeAllocator,
 
-    pub fn init(path: []const u8, allocator: std.mem.Allocator) !ParquetReader {
-        var file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
-
-        const file_size = try file.getEndPos();
-        const file_data = try allocator.alloc(u8, file_size);
-        errdefer allocator.free(file_data);
-
-        const bytes_read = try file.readAll(file_data);
-        if (bytes_read != file_size) return error.IncompleteRead;
+    pub fn init(io: std.Io, path: []const u8, allocator: std.mem.Allocator) !ParquetReader {
+        const file_data = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
+        const file_size = file_data.len;
 
         // Validate PAR1 magic at start and end
         if (!std.mem.eql(u8, file_data[0..4], &PAR1)) return error.InvalidParquetMagic;
@@ -96,7 +89,7 @@ pub const ParquetReader = struct {
         return .{ .chunks = chunks, .bufs = bufs };
     }
 
-    pub fn readAllRowGroupsSelective(self: *ParquetReader, column_names: ?[]const []const u8) !Frame {
+    pub fn readAllRowGroupsSelective(self: *ParquetReader, io: std.Io, column_names: ?[]const []const u8) !Frame {
         const num_rg = self.metadata.row_groups.items.len;
 
         // Collect all column chunks across all row groups into a flat batch
@@ -134,13 +127,10 @@ pub const ParquetReader = struct {
                 decodeColumnTask(all_bufs[i], all_chunks[i], self.metadata, self.ts_allocator.allocator(), &results[i]);
             }
         } else {
-            var pool: std.Thread.Pool = undefined;
-            try pool.init(.{ .allocator = std.heap.page_allocator });
-            defer pool.deinit();
-
-            var wg: std.Thread.WaitGroup = .{};
+            var group: std.Io.Group = .init;
+            errdefer group.cancel(io);
             for (0..total_columns) |i| {
-                pool.spawnWg(&wg, decodeColumnTask, .{
+                try group.concurrent(io, decodeColumnTask, .{
                     all_bufs[i],
                     all_chunks[i],
                     self.metadata,
@@ -148,7 +138,7 @@ pub const ParquetReader = struct {
                     &results[i],
                 });
             }
-            pool.waitAndWork(&wg);
+            try group.await(io);
         }
 
         // Partition results back into per-row-group Chunks
@@ -165,7 +155,7 @@ pub const ParquetReader = struct {
         return Frame{ .chunks = frame_chunks };
     }
 
-    pub fn readRowGroupSelective(self: *ParquetReader, row_group_idx: usize, column_names: ?[]const []const u8) !Chunk {
+    pub fn readRowGroupSelective(self: *ParquetReader, io: std.Io, row_group_idx: usize, column_names: ?[]const []const u8) !Chunk {
         if (row_group_idx >= self.metadata.row_groups.items.len) {
             return error.RowGroupIndexOutOfBounds;
         }
@@ -184,13 +174,10 @@ pub const ParquetReader = struct {
                 decodeColumnTask(info.bufs[i], info.chunks[i], self.metadata, self.ts_allocator.allocator(), &results[i]);
             }
         } else {
-            var pool: std.Thread.Pool = undefined;
-            try pool.init(.{ .allocator = std.heap.page_allocator });
-            defer pool.deinit();
-
-            var wg: std.Thread.WaitGroup = .{};
+            var group: std.Io.Group = .init;
+            errdefer group.cancel(io);
             for (0..n) |i| {
-                pool.spawnWg(&wg, decodeColumnTask, .{
+                try group.concurrent(io, decodeColumnTask, .{
                     info.bufs[i],
                     info.chunks[i],
                     self.metadata,
@@ -198,7 +185,7 @@ pub const ParquetReader = struct {
                     &results[i],
                 });
             }
-            pool.waitAndWork(&wg);
+            try group.await(io);
         }
 
         var cols = try std.array_list.Managed(series.Series).initCapacity(self.allocator, n);
@@ -226,25 +213,25 @@ pub const ParquetReader = struct {
 };
 
 // Convenience function: Read specific columns using the new optimized API
-pub fn readParquetSelective(path: []const u8, column_names: ?[]const []const u8, allocator: std.mem.Allocator) !Frame {
-    var reader = try ParquetReader.init(path, allocator);
+pub fn readParquetSelective(io: std.Io, path: []const u8, column_names: ?[]const []const u8, allocator: std.mem.Allocator) !Frame {
+    var reader = try ParquetReader.init(io, path, allocator);
     defer reader.deinit();
 
-    return try reader.readAllRowGroupsSelective(column_names);
+    return try reader.readAllRowGroupsSelective(io, column_names);
 }
 
 // Convenience function: Get column names from a parquet file
-pub fn getParquetColumns(path: []const u8, allocator: std.mem.Allocator) !std.array_list.Managed([]u8) {
-    var reader = try ParquetReader.init(path, allocator);
+pub fn getParquetColumns(io: std.Io, path: []const u8, allocator: std.mem.Allocator) !std.array_list.Managed([]u8) {
+    var reader = try ParquetReader.init(io, path, allocator);
     defer reader.deinit();
 
     return try reader.getColumnNames();
 }
 
 // Main readParquet function - uses optimized ParquetReader approach
-pub fn readParquet(path: []const u8, allocator: std.mem.Allocator) !Frame {
-    var reader = try ParquetReader.init(path, allocator);
+pub fn readParquet(io: std.Io, path: []const u8, allocator: std.mem.Allocator) !Frame {
+    var reader = try ParquetReader.init(io, path, allocator);
     defer reader.deinit();
 
-    return try reader.readAllRowGroupsSelective(null);
+    return try reader.readAllRowGroupsSelective(io, null);
 }

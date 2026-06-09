@@ -1,5 +1,5 @@
 const std = @import("std");
-const thift = @import("../utils/thift.zig");
+const thift = @import("../../util/thift.zig");
 
 const Allocator = std.mem.Allocator;
 
