@@ -3,7 +3,6 @@
 pub const value = @import("value.zig");
 pub const column = @import("column.zig");
 pub const expr = @import("expr.zig");
-pub const expr_analysis = @import("expr_analysis.zig");
 pub const name = @import("name.zig");
 pub const from = @import("from.zig");
 

@@ -17,8 +17,8 @@ pub const ColumnRef = union(enum) {
 };
 
 pub const BinaryOperator = enum {
-    @"and",
-    @"or",
+    _and,
+    _or,
     eq,
     ne,
     lt,
@@ -35,6 +35,44 @@ pub const BinaryOperator = enum {
     modulo,
     concat,
     at_at,
+
+    /// Map a libpg_query `OpExpr.opno` (PostgreSQL `pg_operator` OID) to a binary op.
+    /// Returns `null` for unknown or unary-only operators.
+    pub fn fromOpno(opno: u32) ?BinaryOperator {
+        return switch (opno) {
+            // = (selected pg_operator OIDs; expand as needed)
+            91, 96, 98, 532, 533, 670, 774, 834, 1054, 1955, 2988, 3335 => .eq,
+            // <>
+            85, 518, 519, 531, 538, 539, 643, 671, 775, 835, 1956, 3336 => .ne,
+            // <
+            97, 412, 534, 535, 664, 672, 1058, 1957, 2314, 2326, 3884, 2862 => .lt,
+            // <=
+            522, 523, 540, 541, 2317, 2329, 3885, 2863 => .lte,
+            // >
+            520, 521, 536, 537, 2800 => .gt,
+            // >=
+            524, 525, 542, 543, 667, 1061, 1960, 3886, 2864 => .gte,
+            // +
+            550, 551, 552, 553, 586, 587, 903, 904 => .plus,
+            // binary -
+            554, 555, 556, 557, 588, 589, 905, 906 => .minus,
+            // *
+            514, 526, 544, 545, 590, 591, 592, 593, 794, 795, 796, 797 => .multiply,
+            // /
+            527, 528, 546, 547, 594, 595, 596, 597, 798, 799, 800, 801 => .divide,
+            // %
+            529, 530 => .modulo,
+            // ||
+            654, 657, 802, 1216, 2777, 2778 => .concat,
+            // LIKE (~~)
+            1207, 1209, 1211 => .like,
+            // ILIKE (~~*)
+            1625, 1627, 1629 => .ilike,
+            // @@
+            513 => .at_at,
+            else => null,
+        };
+    }
 };
 
 pub const UnaryOperator = enum {
@@ -42,6 +80,16 @@ pub const UnaryOperator = enum {
     minus,
     plus,
     bitwise_not,
+
+    /// Map a libpg_query `OpExpr.opno` for prefix (`oprkind = 'l'`) operators.
+    pub fn fromOpno(opno: u32) ?UnaryOperator {
+        return switch (opno) {
+            558, 559, 584, 585, 817, 818 => .minus,
+            919, 920 => .plus,
+            287, 288 => .bitwise_not,
+            else => null,
+        };
+    }
 };
 
 pub const FunctionArg = union(enum) {
@@ -133,7 +181,7 @@ pub const Expr = union(enum) {
 
 pub fn exprAnd(allocator: std.mem.Allocator, left: *Expr, right: *Expr) !*Expr {
     const node = try allocator.create(Expr);
-    node.* = .{ .binary = .{ .left = left, .op = .@"and", .right = right } };
+    node.* = .{ .binary = .{ .left = left, .op = ._and, .right = right } };
     return node;
 }
 
@@ -143,5 +191,16 @@ test "exprAnd builds AND binary node" {
     const node = try exprAnd(std.testing.allocator, &left, &right);
     defer std.testing.allocator.destroy(node);
     try std.testing.expectEqual(std.meta.activeTag(node.*), .binary);
-    try std.testing.expect(node.binary.op == .@"and");
+    try std.testing.expect(node.binary.op == ._and);
+}
+
+test "BinaryOperator.fromOpno maps pg_operator OIDs" {
+    try std.testing.expectEqual(BinaryOperator.eq, BinaryOperator.fromOpno(96));
+    try std.testing.expectEqual(BinaryOperator.lt, BinaryOperator.fromOpno(97));
+    try std.testing.expectEqual(BinaryOperator.plus, BinaryOperator.fromOpno(551));
+    try std.testing.expectEqual(@as(?BinaryOperator, null), BinaryOperator.fromOpno(999_999));
+}
+
+test "UnaryOperator.fromOpno maps unary minus" {
+    try std.testing.expectEqual(UnaryOperator.minus, UnaryOperator.fromOpno(558));
 }

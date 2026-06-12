@@ -9,9 +9,9 @@ pub const TransformFromError = error{
 } || json.TransformJsonError;
 
 /// `SelectStmt.fromClause` → Maya `FromClause`.
+/// Pass `arena.allocator()` — the entire AST lives in one arena per query.
 pub fn transformFromClause(
     allocator: std.mem.Allocator,
-    arena: std.mem.Allocator,
     from_clause: std.json.Value,
 ) TransformFromError!ast.FromClause {
     const arr = try json.expectArray(from_clause);
@@ -19,7 +19,7 @@ pub fn transformFromClause(
     errdefer items.deinit(allocator);
 
     for (arr.items) |elem| {
-        const item = try transformFromItem(allocator, arena, elem);
+        const item = try transformFromItem(allocator, elem);
         try items.append(allocator, item);
     }
 
@@ -29,16 +29,15 @@ pub fn transformFromClause(
 /// Dispatch `{ "RangeVar": … }`, `{ "JoinExpr": … }`, etc.
 pub fn transformFromItem(
     allocator: std.mem.Allocator,
-    arena: std.mem.Allocator,
     node: std.json.Value,
 ) TransformFromError!*ast.FromItem {
     const tagged = try json.taggedNode(node);
 
-    const item = try arena.create(ast.FromItem);
+    const item = try allocator.create(ast.FromItem);
     if (std.mem.eql(u8, tagged.tag, "RangeVar")) {
         item.* = .{ .table = try transformRangeVar(allocator, tagged.fields) };
     } else if (std.mem.eql(u8, tagged.tag, "JoinExpr")) {
-        item.* = .{ .join = try transformJoinExpr(allocator, arena, tagged.fields) };
+        item.* = .{ .join = try transformJoinExpr(allocator, tagged.fields) };
     } else if (std.mem.eql(u8, tagged.tag, "RangeSubselect")) {
         return error.UnsupportedNode;
     } else {
@@ -74,7 +73,6 @@ pub fn transformRangeVar(allocator: std.mem.Allocator, fields: std.json.ObjectMa
 
 pub fn transformJoinExpr(
     allocator: std.mem.Allocator,
-    arena: std.mem.Allocator,
     fields: std.json.ObjectMap,
 ) TransformFromError!ast.Join {
     const larg = fields.get("larg") orelse return error.MissingField;
@@ -86,8 +84,8 @@ pub fn transformJoinExpr(
     var join = ast.Join{
         .kind = kind,
         .natural = json.getBool(fields, "isNatural", false),
-        .left = try transformFromItem(allocator, arena, larg),
-        .right = try transformFromItem(allocator, arena, rarg),
+        .left = try transformFromItem(allocator, larg),
+        .right = try transformFromItem(allocator, rarg),
     };
 
     if (fields.get("usingClause")) |using_value| {
@@ -98,7 +96,7 @@ pub fn transformJoinExpr(
 
     if (fields.get("quals")) |quals_value| {
         if (quals_value != .null) {
-            join.on = try expr_transform.transformExpr(allocator, arena, quals_value);
+            join.on = try expr_transform.transformExpr(allocator, quals_value);
         }
     }
 
@@ -161,7 +159,7 @@ test "transform FROM clause list" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const from_clause = try transformFromClause(arena.allocator(), arena.allocator(), parsed.value);
+    const from_clause = try transformFromClause(arena.allocator(), parsed.value);
 
     try std.testing.expectEqual(@as(usize, 2), from_clause.items.len);
     try std.testing.expect(from_clause.items[0].*.table.name.relation.len > 0);
@@ -180,7 +178,7 @@ test "transform nested JoinExpr skeleton" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const item = try transformFromItem(arena.allocator(), arena.allocator(), parsed.value);
+    const item = try transformFromItem(arena.allocator(), parsed.value);
     try std.testing.expectEqual(ast.FromItem.join, std.meta.activeTag(item.*));
     try std.testing.expect(item.join.kind == .inner);
     try std.testing.expectEqualStrings("orders", item.join.left.*.table.name.relation);

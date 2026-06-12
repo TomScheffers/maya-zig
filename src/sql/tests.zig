@@ -24,7 +24,7 @@ const TestCtx = struct {
     }
 
     fn transform_expr(self: *TestCtx) !*ast.Expr {
-        return exprm.transformExpr(self.arena.allocator(), self.arena.allocator(), self.parsed.value);
+        return exprm.transformExpr(self.arena.allocator(), self.parsed.value);
     }
 };
 
@@ -82,7 +82,7 @@ test "BoolExpr AND" {
     const expr = try ctx.transform_expr();
 
     try std.testing.expectEqual(std.meta.activeTag(expr.*), .binary);
-    try std.testing.expect(expr.binary.op == .@"and");
+    try std.testing.expect(expr.binary.op == ._and);
     try std.testing.expectEqual(std.meta.activeTag(expr.binary.left.*), .column);
     try std.testing.expectEqualStrings("a", expr.binary.left.column.bare);
     try std.testing.expectEqual(std.meta.activeTag(expr.binary.right.*), .column);
@@ -102,7 +102,7 @@ test "BoolExpr OR" {
     const expr = try ctx.transform_expr();
 
     try std.testing.expectEqual(std.meta.activeTag(expr.*), .binary);
-    try std.testing.expect(expr.binary.op == .@"or");
+    try std.testing.expect(expr.binary.op == ._or);
 }
 
 test "BoolExpr NOT" {
@@ -158,7 +158,7 @@ test "OpExpr less than" {
 
 test "OpExpr unary minus" {
     const json_txt =
-        \\{"OpExpr":{"opno":254,"args":[
+        \\{"OpExpr":{"opno":558,"args":[
         \\  {"A_Const":{"ival":{"ival":"5"},"location":1}}
         \\],"location":2}}
     ;
@@ -234,7 +234,7 @@ test "FuncCall with column arg" {
 
 test "TypeCast to integer" {
     const json_txt =
-        \\{"TypeCast":{"arg":{"A_Const":{"ival":{"ival":"42"},"location":1}},"typeName":{"TypeName":{"names":[{"String":{"sval":"int4"}}],"typemod":-1}},"location":2}}
+        \\{"TypeCast":{"arg":{"A_Const":{"ival":{"ival":"42"},"location":1}},"typeName":{"names":[{"String":{"sval":"int4"}}],"typemod":-1},"location":2}}
     ;
 
     var ctx = try TestCtx.init(json_txt);
@@ -268,7 +268,7 @@ test "JoinExpr USING columns" {
     var ctx = try TestCtx.init(json_txt);
     defer ctx.deinit();
 
-    const item = try from.transformFromItem(ctx.arena.allocator(), ctx.arena.allocator(), ctx.parsed.value);
+    const item = try from.transformFromItem(ctx.arena.allocator(), ctx.parsed.value);
 
     try std.testing.expectEqual(@as(usize, 2), item.join.using_columns.len);
     try std.testing.expectEqualStrings("id", item.join.using_columns[0]);
@@ -287,7 +287,7 @@ test "JoinExpr LEFT with ON quals" {
     var ctx = try TestCtx.init(json_txt);
     defer ctx.deinit();
 
-    const item = try from.transformFromItem(ctx.arena.allocator(), ctx.arena.allocator(), ctx.parsed.value);
+    const item = try from.transformFromItem(ctx.arena.allocator(), ctx.parsed.value);
 
     try std.testing.expect(item.join.kind == .left);
     try std.testing.expect(item.join.on != null);
@@ -309,7 +309,7 @@ test "FROM clause join tree" {
     var ctx = try TestCtx.init(json_txt);
     defer ctx.deinit();
 
-    const from_clause = try from.transformFromClause(ctx.arena.allocator(), ctx.arena.allocator(), ctx.parsed.value);
+    const from_clause = try from.transformFromClause(ctx.arena.allocator(), ctx.parsed.value);
 
     try std.testing.expectEqual(@as(usize, 2), from_clause.items.len);
     try std.testing.expectEqual(ast.FromItem.join, std.meta.activeTag(from_clause.items[0].*));
