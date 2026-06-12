@@ -61,4 +61,32 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_mod_tests.step);
+
+    const pg_query_mod = b.createModule(.{
+        .root_source_file = b.path("src/sql/pg_query.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "pg_query_c", .module = pg_query_c },
+        },
+    });
+    pg_query_mod.linkLibrary(pg_query_lib);
+    pg_query_mod.link_libc = true;
+
+    const dump_parse = b.addExecutable(.{
+        .name = "dump-parse-json",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/dump_parse_json.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "pg_query", .module = pg_query_mod },
+            },
+        }),
+    });
+    dump_parse.root_module.linkLibrary(pg_query_lib);
+    dump_parse.root_module.link_libc = true;
+    b.step("dump-parse-json", "Write tools/complex_select.json from libpg_query").dependOn(
+        &b.addRunArtifact(dump_parse).step,
+    );
 }
