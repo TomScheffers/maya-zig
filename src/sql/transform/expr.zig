@@ -31,6 +31,8 @@ pub fn transformExpr(
         expr.* = try transformTypeCast(allocator, tagged.fields);
     } else if (std.mem.eql(u8, tagged.tag, "FuncCall")) {
         expr.* = try transformFuncCall(allocator, tagged.fields);
+    } else if (std.mem.eql(u8, tagged.tag, "NullTest")) {
+        expr.* = try transformNullTest(allocator, tagged.fields);
     } else {
         return error.UnsupportedNode;
     }
@@ -208,4 +210,18 @@ fn transformFuncCall(allocator: std.mem.Allocator, fields: std.json.ObjectMap) T
     }
 
     return .{ .function = .{ .name = func_names, .args = args } };
+}
+
+fn transformNullTest(allocator: std.mem.Allocator, fields: std.json.ObjectMap) TransformExprError!ast.Expr {
+    const arg_field = fields.get("arg") orelse return error.MissingField;
+    const arg = try transformExpr(allocator, arg_field);
+
+    const nulltesttype = json.optionalString(fields, "nulltesttype") orelse return error.MissingField;
+    if (std.mem.eql(u8, nulltesttype, "IS_NULL")) {
+        return .{ .is_null = .{ .expr = arg, .negated = false } };
+    } else if (std.mem.eql(u8, nulltesttype, "IS_NOT_NULL")) {
+        return .{ .is_null = .{ .expr = arg, .negated = true } };
+    }
+
+    return error.UnsupportedNode;
 }
